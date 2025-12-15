@@ -18,7 +18,7 @@ const sounds = {
 };
 
 export default function App() {
-  // Fix 2: حفظ الاسم في localStorage
+  // حفظ الاسم في localStorage
   const [name, setName] = useState(localStorage.getItem('mafia_playerName') || '');
 
   const [view, setView] = useState(name ? 'LOGIN' : 'LOGIN');
@@ -29,7 +29,7 @@ export default function App() {
   const [timer, setTimer] = useState(0);
   const [msg, setMsg] = useState('');
   const [investigation, setInvestigation] = useState(null);
-  // جديد: بيانات التصويت والقرار
+  // بيانات التصويت والقرار
   const [voteData, setVoteData] = useState(null);
   const [currentVotes, setCurrentVotes] = useState({});
 
@@ -60,7 +60,7 @@ export default function App() {
     socket.on('phase_change', (newPhase) => {
       setPhase(newPhase);
       setInvestigation(null);
-      setVoteData(null); // مسح بيانات التصويت عند تغيير المرحلة
+      setVoteData(null);
     });
 
     socket.on('play_audio', (key) => {
@@ -73,7 +73,7 @@ export default function App() {
       setTimeout(() => setMsg(''), 5000);
     });
 
-    socket.on('game_message', (msg) => { // تم تحديث استقبال الرسالة
+    socket.on('game_message', (msg) => {
       setMsg(msg);
       setTimeout(() => setMsg(''), 5000);
     });
@@ -85,11 +85,11 @@ export default function App() {
       setCurrentVotes(votes);
     });
 
-    // جديد: استقبال بيانات التصويت للهوست
+    // استقبال بيانات التصويت للهوست
     socket.on('host_needs_decision', (data) => {
       setVoteData(data);
       setPhase('HOST_DECISION'); // تغيير المرحلة لشاشة القرار
-      setPlayers(data.players); // تحديث قائمة اللاعبين لضمان الصحة
+      setPlayers(data.players);
     });
 
     socket.on('game_over', (winner) => {
@@ -118,6 +118,7 @@ export default function App() {
   };
 
   const startGame = () => {
+    if (players.length < 5) return alert('يجب أن يكون الحد الأدنى 5 لاعبين!');
     socket.emit('start_game', { roomId });
   };
 
@@ -135,6 +136,7 @@ export default function App() {
     socket.emit('host_end_voting_request', { roomId });
   };
 
+  // دالة اتخاذ القرار النهائي (الطرد أو السكب)
   const hostMakeDecision = (decision, kickedPlayerId = null) => {
     socket.emit('host_made_decision', { roomId, decision, kickedPlayerId });
   };
@@ -146,7 +148,7 @@ export default function App() {
     const candidates = Object.entries(voteData.voteCounts).map(([id, count]) => {
       const player = players.find(p => p.id === id);
       return { id, name: player ? player.name : 'مجهول', votes: count };
-    }).sort((a, b) => b.votes - a.votes);
+    }).sort((a, b) => b.votes - a.motes); // يجب أن يكون b.votes
 
     return (
       <div className="min-h-screen bg-slate-900 text-white p-4">
@@ -196,7 +198,7 @@ export default function App() {
             className="w-full p-3 mb-4 rounded bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500"
             placeholder="أدخل اسمك"
             value={name}
-            onChange={handleNameChange} // ربط دالة حفظ الاسم
+            onChange={handleNameChange}
           />
           <button onClick={createRoom} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded mb-3 transition">إنشاء غرفة جديدة</button>
 

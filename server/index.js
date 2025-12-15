@@ -34,7 +34,7 @@ const PHASES = {
   DAY_RESULTS: 'DAY_RESULTS',
   DAY_DISCUSSION: 'DAY_DISCUSSION',
   DAY_VOTING: 'DAY_VOTING',
-  HOST_DECISION: 'HOST_DECISION', // مرحلة جديدة لقرار الهوست
+  HOST_DECISION: 'HOST_DECISION',
   GAME_OVER: 'GAME_OVER'
 };
 
@@ -235,21 +235,22 @@ io.on('connection', (socket) => {
     rooms[roomId].votes = {};
   }
 
-  // استقبال التصويت (لا تتم المعالجة التلقائية بعد الآن)
+  // استقبال التصويت (الهوست يصوت أيضاً هنا)
   socket.on('vote_player', ({ roomId, targetId }) => {
     const room = rooms[roomId];
     if (room.phase !== PHASES.DAY_VOTING) return;
 
+    // يسجل التصويت بغض النظر عمن هو المصوت (بما فيهم الهوست)
     room.votes[socket.id] = targetId;
 
-    // إرسال تحديث للهوست (وشاشة التصويت)
+    // إرسال تحديث لجميع اللاعبين (ومنهم الهوست)
     io.to(roomId).emit('update_votes', room.votes);
   });
 
-  // **جديد:** طلب الهوست إنهاء التصويت في أي وقت
+  // **صلاحية الهوست:** طلب إنهاء التصويت والدخول في مرحلة القرار في أي وقت
   socket.on('host_end_voting_request', ({ roomId }) => {
     const room = rooms[roomId];
-    // يسمح للهوست بإنهاء التصويت فقط إذا كانت المرحلة DAY_VOTING
+    // يجب أن يكون الهوست ومن مرحلة التصويت
     if (!room || socket.id !== room.hostId || room.phase !== PHASES.DAY_VOTING) return;
 
     processVotingForHost(roomId);
@@ -261,6 +262,7 @@ io.on('connection', (socket) => {
     updatePhase(roomId, PHASES.HOST_DECISION); // ينتقل لمرحلة القرار
 
     const voteCounts = {};
+    // التأكد من أن الهوست يرى نتائج تصويت جميع اللاعبين
     Object.values(room.votes).forEach(targetId => {
       voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
     });
@@ -269,7 +271,9 @@ io.on('connection', (socket) => {
     let maxVotes = 0;
     let candidateId = null;
     for (const [id, count] of Object.entries(voteCounts)) {
-      if (count > maxVotes) {
+      // نتحقق من أن اللاعب المصوّت عليه لا يزال حياً
+      const isAlive = room.players.find(p => p.id === id)?.isAlive;
+      if (count > maxVotes && isAlive) {
         maxVotes = count;
         candidateId = id;
       }
@@ -289,6 +293,7 @@ io.on('connection', (socket) => {
   // قرار الهوست النهائي (إما طرد أو سكب)
   socket.on('host_made_decision', ({ roomId, decision, kickedPlayerId }) => {
     const room = rooms[roomId];
+    // يجب أن يكون الهوست ومن مرحلة القرار فقط
     if (!room || socket.id !== room.hostId || room.phase !== PHASES.HOST_DECISION) return;
 
     if (decision === 'KICK') {
