@@ -3,7 +3,8 @@ import io from 'socket.io-client';
 import { Howl } from 'howler';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// **مهم:** ضع رابط سيرفرك على Render هنا:
+// **مهم:** ضع رابط سيرفرك (Render) الخاص بك هنا
+// مثال: https://mafia-game-dpfv.onrender.com
 const socket = io('https://mafia-game-dpfv.onrender.com');
 
 // مكتبة الأصوات (تعتمد على وجود ملفات الصوت في client/public/sounds)
@@ -18,7 +19,7 @@ const sounds = {
 };
 
 export default function App() {
-  const [view, setView] = useState('LOGIN'); // LOGIN, LOBBY, GAME
+  const [view, setView] = useState('LOGIN');
   const [roomId, setRoomId] = useState('');
   const [name, setName] = useState('');
   const [players, setPlayers] = useState([]);
@@ -54,7 +55,7 @@ export default function App() {
 
     socket.on('phase_change', (newPhase) => {
       setPhase(newPhase);
-      setInvestigation(null); // تصفية نتيجة التحقيق
+      setInvestigation(null);
     });
 
     socket.on('play_audio', (key) => {

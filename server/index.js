@@ -7,27 +7,24 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 app.use(cors());
 
-// **مهم:** تأكد أن هذا الرابط هو رابط سيرفرك على Render
-// مثال: const socket = io('https://mafia-game-dpfv.onrender.com');
-const RENDER_SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
+// **مهم:** ضع رابط الواجهة (Vercel) الخاص بك هنا
+// مثال: https://mafia-game-xxx.vercel.app
+const VERCEL_URL = 'https://mafia-game.vercel.app';
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    // هذا يسمح لـ Vercel بالاتصال
-    origin: [
-      "https://mafia-game.vercel.app", // ضع رابط Vercel هنا (مع اسم مشروعك)
-      "http://localhost:5173" // للمطورين (أنت)
-    ],
+    // يسمح بالاتصال من الواجهة المنشورة ومن البيئة المحلية للتطوير
+    origin: [VERCEL_URL, "http://localhost:5173"],
     methods: ["GET", "POST"],
     credentials: true
   },
-  // **الإضافة الأهم لحل مشكلة الجوالات (Websockets):**
+  // **الحل الحاسم لمشكلة اتصال الجوالات:** يفرض استخدام بروتوكولات الاتصال الأكثر استقراراً.
   transports: ['websocket', 'polling']
 });
 
 // === متغيرات اللعبة ===
-const rooms = {}; // لتخزين بيانات كل غرفة
+const rooms = {};
 
 // === مراحل اللعبة ===
 const PHASES = {
@@ -71,15 +68,15 @@ io.on('connection', (socket) => {
       winner: null
     };
     socket.join(roomId);
-    // نضيف الهوست كلاعب (التعديل الجذري لضمان عمل الزر على الجوال)
+    // نثبت الهوست لضمان عمل زر "ابدأ اللعبة" على الجوال (التعديل الجذري)
     rooms[roomId].players.push({
       id: socket.id,
       name: playerName,
-      role: 'PENDING', // نجعله Pending لتوحيد الأدوار قبل بدء اللعبة
+      role: 'PENDING',
       isAlive: true,
-      avatar: Math.floor(Math.random() * 10), // صورة عشوائية
-      isHost: true, // الأهم: نثبت أنه الهوست
-      hasSelfHealed: false // خاص بالممرضة
+      avatar: Math.floor(Math.random() * 10),
+      isHost: true,
+      hasSelfHealed: false
     });
     socket.emit('room_created', roomId);
     io.to(roomId).emit('update_players', rooms[roomId].players);
@@ -100,7 +97,6 @@ io.on('connection', (socket) => {
         hasSelfHealed: false
       });
       io.to(roomId).emit('update_players', room.players);
-      // إرسال حالة الغرفة للاعب الجديد
       socket.emit('game_state_update', { phase: room.phase });
     } else {
       socket.emit('error', 'الغرفة غير موجودة أو اللعبة بدأت');
@@ -110,53 +106,46 @@ io.on('connection', (socket) => {
   // 3. بدء اللعبة (توزيع الأدوار)
   socket.on('start_game', ({ roomId }) => {
     const room = rooms[roomId];
-
-    // **التعديل الثاني:** التحقق من دور الهوست الفعلي
+    // التأكد من أن الهوست الفعلي هو من ضغط الزر
     const hostPlayer = room.players.find(p => p.id === socket.id && p.isHost);
     if (!room || !hostPlayer) return;
 
     const playerCount = room.players.length;
     let mafiaCount = playerCount < 9 ? 1 : 2;
 
-    // تجهيز قائمة الأدوار
     let roles = [];
     for (let i = 0; i < mafiaCount; i++) roles.push('MAFIA');
-    roles.push('DOCTOR'); // الممرضة
-    roles.push('DETECTIVE'); // الشايب
+    roles.push('DOCTOR');
+    roles.push('DETECTIVE');
 
-    // الباقي مواطنين
     while (roles.length < playerCount) {
       roles.push('CITIZEN');
     }
 
     roles = shuffleArray(roles);
 
-    // توزيع الأدوار على اللاعبين
     room.players.forEach((player, index) => {
       player.role = roles[index];
     });
 
-    io.to(roomId).emit('game_started', room.players); // يرسل لكل واحد دوره
+    io.to(roomId).emit('game_started', room.players);
     startNightCycle(roomId);
   });
 
   // === إدارة جولات الليل ===
   function startNightCycle(roomId) {
     const room = rooms[roomId];
-    // تصفية الاختيارات السابقة
     room.mafiaTarget = null;
     room.nurseTarget = null;
     room.detectiveCheck = null;
 
-    // المرحلة 1: النوم
     updatePhase(roomId, PHASES.NIGHT_SLEEP);
-    io.to(roomId).emit('play_audio', 'everyone_sleep'); // تشغيل صوت النوم عند الهوست
+    io.to(roomId).emit('play_audio', 'everyone_sleep');
 
     setTimeout(() => {
-      // المرحلة 2: المافيا
       updatePhase(roomId, PHASES.NIGHT_MAFIA);
       io.to(roomId).emit('play_audio', 'mafia_wake');
-    }, 4000); // 4 ثواني للنوم
+    }, 4000);
   }
 
   // استقبال الأكشن من اللاعبين (قتل، حماية، كشف)
@@ -165,45 +154,37 @@ io.on('connection', (socket) => {
     const player = room.players.find(p => p.id === socket.id);
     if (!room || !player || !player.isAlive) return;
 
-    // أكشن المافيا
     if (room.phase === PHASES.NIGHT_MAFIA && player.role === 'MAFIA') {
       room.mafiaTarget = targetId;
-      // إذا فيه 2 مافيا، يكفي واحد يختار عشان نمشي اللعب بسرعة (أو ننتظر اتفاقهم - هنا سنسرع اللعب)
 
-      // ننتقل للممرضة بعد 3 ثواني
       setTimeout(() => {
         updatePhase(roomId, PHASES.NIGHT_NURSE);
         io.to(roomId).emit('play_audio', 'nurse_wake');
       }, 3000);
     }
 
-    // أكشن الممرضة
     if (room.phase === PHASES.NIGHT_NURSE && player.role === 'DOCTOR') {
-      // التحقق من قاعدة "علاج النفس مرة واحدة"
       if (targetId === socket.id) {
         if (player.hasSelfHealed) {
           socket.emit('error', 'لقد عالجت نفسك سابقاً!');
           return;
         }
-        player.hasSelfHealed = true; // استهلكت المحاولة
+        player.hasSelfHealed = true;
       }
 
       room.nurseTarget = targetId;
 
-      // ننتقل للشايب بعد 3 ثواني
       setTimeout(() => {
         updatePhase(roomId, PHASES.NIGHT_DETECTIVE);
         io.to(roomId).emit('play_audio', 'detective_wake');
       }, 3000);
     }
 
-    // أكشن الشايب
     if (room.phase === PHASES.NIGHT_DETECTIVE && player.role === 'DETECTIVE') {
       const targetPlayer = room.players.find(p => p.id === targetId);
       const result = targetPlayer.role === 'MAFIA' ? 'مافيا (MAFIA)' : 'بريء (Citizen/Doc)';
-      socket.emit('investigation_result', result); // النتيجة تروح للشايب بس
+      socket.emit('investigation_result', result);
 
-      // ننتقل للصباح بعد 3 ثواني
       setTimeout(() => {
         calculateResults(roomId);
       }, 3000);
@@ -220,7 +201,6 @@ io.on('connection', (socket) => {
     let audioToPlay = "";
 
     if (room.mafiaTarget && room.mafiaTarget !== room.nurseTarget) {
-      // نجح القتل
       const victimIndex = room.players.findIndex(p => p.id === room.mafiaTarget);
       if (victimIndex !== -1) {
         room.players[victimIndex].isAlive = false;
@@ -228,7 +208,6 @@ io.on('connection', (socket) => {
         audioToPlay = 'result_success';
       }
     } else {
-      // فشل القتل (الممرضة انقذته)
       msg = "الليلة كانت آمنة! لم يمت أحد.";
       audioToPlay = 'result_fail';
     }
@@ -238,11 +217,9 @@ io.on('connection', (socket) => {
 
     checkWinCondition(roomId);
 
-    // بدء المؤقت للنقاش
     setTimeout(() => {
       if (room.phase !== PHASES.GAME_OVER) {
         updatePhase(roomId, PHASES.DAY_DISCUSSION);
-        // مؤقت 1:45 دقيقة
         let timeLeft = 105;
         const timer = setInterval(() => {
           if (room.phase !== PHASES.DAY_DISCUSSION) { clearInterval(timer); return; }
@@ -254,7 +231,7 @@ io.on('connection', (socket) => {
           }
         }, 1000);
       }
-    }, 5000); // 5 ثواني عرض النتيجة
+    }, 5000);
   }
 
   function startVoting(roomId) {
@@ -267,10 +244,8 @@ io.on('connection', (socket) => {
     const room = rooms[roomId];
     if (room.phase !== PHASES.DAY_VOTING) return;
 
-    // تخزين التصويت
     room.votes[socket.id] = targetId;
 
-    // التحقق هل الجميع صوت؟ (الأحياء فقط)
     const alivePlayers = room.players.filter(p => p.isAlive).length;
     if (Object.keys(room.votes).length >= alivePlayers) {
       processVoting(roomId);
@@ -285,7 +260,6 @@ io.on('connection', (socket) => {
       voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
     });
 
-    // إيجاد أكثر شخص حصل على تصويت
     let maxVotes = 0;
     let kickedId = null;
     for (const [id, count] of Object.entries(voteCounts)) {
@@ -304,7 +278,6 @@ io.on('connection', (socket) => {
     checkWinCondition(roomId);
 
     if (room.phase !== PHASES.GAME_OVER) {
-      // العودة لليل
       setTimeout(() => {
         startNightCycle(roomId);
       }, 5000);
@@ -314,7 +287,7 @@ io.on('connection', (socket) => {
   function checkWinCondition(roomId) {
     const room = rooms[roomId];
     const mafiaAlive = room.players.filter(p => p.isAlive && p.role === 'MAFIA').length;
-    const citizensAlive = room.players.filter(p => p.isAlive && p.role !== 'MAFIA').length; // الكل ضد المافيا
+    const citizensAlive = room.players.filter(p => p.isAlive && p.role !== 'MAFIA').length;
 
     if (mafiaAlive === 0) {
       updatePhase(roomId, PHASES.GAME_OVER);
@@ -334,7 +307,6 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log('User Disconnected', socket.id);
-    // التعامل مع خروج اللاعب (اختياري: يمكن إنهاء اللعبة أو تحويله لميت)
   });
 });
 
