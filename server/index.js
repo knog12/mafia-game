@@ -14,9 +14,16 @@ const RENDER_SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: RENDER_SERVER_URL, // يسمح بالاتصال من رابط الواجهة المنشور
-    methods: ["GET", "POST"]
-  }
+    // هذا يسمح لـ Vercel بالاتصال
+    origin: [
+      "https://mafia-game.vercel.app", // ضع رابط Vercel هنا (مع اسم مشروعك)
+      "http://localhost:5173" // للمطورين (أنت)
+    ],
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  // **الإضافة الأهم لحل مشكلة الجوالات (Websockets):**
+  transports: ['websocket', 'polling']
 });
 
 // === متغيرات اللعبة ===
