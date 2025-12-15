@@ -73,7 +73,7 @@ export default function App() {
       setTimeout(() => setMsg(''), 5000);
     });
 
-    socket.on('game_message', ({ msg }) => {
+    socket.on('game_message', (msg) => { // تم تحديث استقبال الرسالة
       setMsg(msg);
       setTimeout(() => setMsg(''), 5000);
     });
@@ -130,8 +130,9 @@ export default function App() {
     }
   };
 
-  const endVotingHost = () => {
-    socket.emit('end_voting_host', { roomId });
+  // دالة طلب إنهاء التصويت من الهوست في أي وقت
+  const hostEndVotingRequest = () => {
+    socket.emit('host_end_voting_request', { roomId });
   };
 
   const hostMakeDecision = (decision, kickedPlayerId = null) => {
@@ -140,7 +141,8 @@ export default function App() {
 
   // --- شاشات اللعبة ---
 
-  if (phase === 'HOST_DECISION' && myPlayer?.isHost) {
+  if (phase === 'HOST_DECISION' && myPlayer?.isHost && voteData) {
+    // تجهيز قائمة المرشحين بناءً على الأصوات
     const candidates = Object.entries(voteData.voteCounts).map(([id, count]) => {
       const player = players.find(p => p.id === id);
       return { id, name: player ? player.name : 'مجهول', votes: count };
@@ -150,7 +152,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-900 text-white p-4">
         <div className="max-w-2xl mx-auto mt-8">
           <h2 className="text-3xl font-bold mb-6 text-red-500 text-center">🛑 قرار الهوست 🛑</h2>
-          <p className="text-lg mb-4 text-center">انتهى التصويت. المرجو اتخاذ قرار الطرد:</p>
+          <p className="text-lg mb-4 text-center">انتهى التصويت بقرار الهوست. المرجو اتخاذ قرار الطرد:</p>
 
           <div className="bg-slate-800 p-4 rounded-xl mb-6">
             <h3 className="text-xl font-semibold mb-3">نتائج التصويت:</h3>
@@ -292,13 +294,14 @@ export default function App() {
           </div>
         )}
 
+        {/* زر إنهاء التصويت في أي وقت للهوست */}
         {phase === 'DAY_VOTING' && myPlayer?.isHost && (
           <div className="text-center mb-4">
             <button
-              onClick={endVotingHost}
+              onClick={hostEndVotingRequest}
               className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition"
             >
-              إنهاء التصويت (تحديد المطرود)
+              إنهاء التصويت والدخول في مرحلة القرار 🗳️
             </button>
           </div>
         )}

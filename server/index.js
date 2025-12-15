@@ -1,5 +1,5 @@
 const express = require('express');
-const http = require = require('http');
+const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
@@ -240,22 +240,25 @@ io.on('connection', (socket) => {
     const room = rooms[roomId];
     if (room.phase !== PHASES.DAY_VOTING) return;
 
-    // يقوم اللاعب بالتصويت ويتم حفظ التصويت فوراً
     room.votes[socket.id] = targetId;
 
     // إرسال تحديث للهوست (وشاشة التصويت)
     io.to(roomId).emit('update_votes', room.votes);
-
-    // هنا لا يتم استدعاء processVoting تلقائياً، بل ننتظر قرار الهوست
   });
 
-  // عند انتهاء مهلة التصويت (إذا أردنا إضافة مؤقت للتصويت)
-  // نعتبر أن انتهاء مهلة النقاش هو المهلة الوحيدة، وبعدها نرسل النتائج للهوست
+  // **جديد:** طلب الهوست إنهاء التصويت في أي وقت
+  socket.on('host_end_voting_request', ({ roomId }) => {
+    const room = rooms[roomId];
+    // يسمح للهوست بإنهاء التصويت فقط إذا كانت المرحلة DAY_VOTING
+    if (!room || socket.id !== room.hostId || room.phase !== PHASES.DAY_VOTING) return;
+
+    processVotingForHost(roomId);
+  });
 
   // دالة خاصة لإرسال النتائج للهوست لاتخاذ القرار
   function processVotingForHost(roomId) {
     const room = rooms[roomId];
-    updatePhase(roomId, PHASES.HOST_DECISION); // مرحلة جديدة
+    updatePhase(roomId, PHASES.HOST_DECISION); // ينتقل لمرحلة القرار
 
     const voteCounts = {};
     Object.values(room.votes).forEach(targetId => {
@@ -279,17 +282,9 @@ io.on('connection', (socket) => {
       candidateName: candidate ? candidate.name : 'لا يوجد مرشح واضح',
       candidateId: candidateId,
       voteCounts: voteCounts,
-      players: room.players // لإظهار قائمة اللاعبين
+      players: room.players
     });
   }
-
-  // ربط انتهاء التصويت بدالة الإرسال للهوست
-  socket.on('end_voting_host', ({ roomId }) => {
-    const room = rooms[roomId];
-    if (!room || socket.id !== room.hostId) return; // تأكد أنه الهوست
-
-    processVotingForHost(roomId);
-  });
 
   // قرار الهوست النهائي (إما طرد أو سكب)
   socket.on('host_made_decision', ({ roomId, decision, kickedPlayerId }) => {
@@ -307,12 +302,13 @@ io.on('connection', (socket) => {
       io.to(roomId).emit('game_message', 'قرر الهوست عدم طرد أحد هذه الجولة.');
     }
 
+    // بمجرد اتخاذ القرار، ينتقل مباشرة إلى الجولة التالية (الليل)
     checkWinCondition(roomId);
 
     if (room.phase !== PHASES.GAME_OVER) {
       setTimeout(() => {
-        startNightCycle(roomId);
-      }, 5000);
+        startNightCycle(roomId); // ينتقل مباشرة للّيل
+      }, 5000); // مهلة 5 ثواني لقراءة الرسالة
     }
   });
 
