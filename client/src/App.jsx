@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 // **مهم:** ضع رابط سيرفرك (Render) الخاص بك هنا
 const socket = io('https://mafia-game-dpfv.onrender.com');
 
-// مكتبة الأصوات (تعتمد على وجود ملفات الصوت في client/public/sounds)
+// مكتبة الأصوات
 const sounds = {
   everyone_sleep: new Howl({ src: ['/sounds/sleep.mp3'] }),
   mafia_wake: new Howl({ src: ['/sounds/mafia.mp3'] }),
@@ -18,16 +18,20 @@ const sounds = {
 };
 
 export default function App() {
-  // تم حذف audioReady، وتعيينها ضمنياً على أنها جاهزة
-  const [view, setView] = useState('LOGIN');
+  // Fix 2: حفظ الاسم في localStorage
+  const [name, setName] = useState(localStorage.getItem('mafia_playerName') || '');
+
+  const [view, setView] = useState(name ? 'LOGIN' : 'LOGIN');
   const [roomId, setRoomId] = useState('');
-  const [name, setName] = useState('');
   const [players, setPlayers] = useState([]);
   const [myPlayer, setMyPlayer] = useState(null);
   const [phase, setPhase] = useState('LOBBY');
   const [timer, setTimer] = useState(0);
   const [msg, setMsg] = useState('');
   const [investigation, setInvestigation] = useState(null);
+  // جديد: بيانات التصويت والقرار
+  const [voteData, setVoteData] = useState(null);
+  const [currentVotes, setCurrentVotes] = useState({});
 
   useEffect(() => {
     socket.on('room_created', (id) => {
@@ -56,10 +60,10 @@ export default function App() {
     socket.on('phase_change', (newPhase) => {
       setPhase(newPhase);
       setInvestigation(null);
+      setVoteData(null); // مسح بيانات التصويت عند تغيير المرحلة
     });
 
     socket.on('play_audio', (key) => {
-      // تم إزالة شرط audioReady للتشغيل التلقائي
       if (sounds[key]) sounds[key].play();
     });
 
@@ -69,9 +73,24 @@ export default function App() {
       setTimeout(() => setMsg(''), 5000);
     });
 
-    socket.on('timer_update', (t) => setTimer(t));
+    socket.on('game_message', ({ msg }) => {
+      setMsg(msg);
+      setTimeout(() => setMsg(''), 5000);
+    });
 
+    socket.on('timer_update', (t) => setTimer(t));
     socket.on('investigation_result', (res) => setInvestigation(res));
+
+    socket.on('update_votes', (votes) => {
+      setCurrentVotes(votes);
+    });
+
+    // جديد: استقبال بيانات التصويت للهوست
+    socket.on('host_needs_decision', (data) => {
+      setVoteData(data);
+      setPhase('HOST_DECISION'); // تغيير المرحلة لشاشة القرار
+      setPlayers(data.players); // تحديث قائمة اللاعبين لضمان الصحة
+    });
 
     socket.on('game_over', (winner) => {
       setPhase('GAME_OVER');
@@ -79,7 +98,13 @@ export default function App() {
     });
 
     return () => socket.off();
-  }, []); // مصفوفة فارغة لـ useEffect
+  }, []);
+
+  const handleNameChange = (e) => {
+    const newName = e.target.value;
+    setName(newName);
+    localStorage.setItem('mafia_playerName', newName); // حفظ الاسم
+  };
 
   const createRoom = () => {
     if (!name) return alert('اكتب اسمك أولاً');
@@ -105,6 +130,60 @@ export default function App() {
     }
   };
 
+  const endVotingHost = () => {
+    socket.emit('end_voting_host', { roomId });
+  };
+
+  const hostMakeDecision = (decision, kickedPlayerId = null) => {
+    socket.emit('host_made_decision', { roomId, decision, kickedPlayerId });
+  };
+
+  // --- شاشات اللعبة ---
+
+  if (phase === 'HOST_DECISION' && myPlayer?.isHost) {
+    const candidates = Object.entries(voteData.voteCounts).map(([id, count]) => {
+      const player = players.find(p => p.id === id);
+      return { id, name: player ? player.name : 'مجهول', votes: count };
+    }).sort((a, b) => b.votes - a.votes);
+
+    return (
+      <div className="min-h-screen bg-slate-900 text-white p-4">
+        <div className="max-w-2xl mx-auto mt-8">
+          <h2 className="text-3xl font-bold mb-6 text-red-500 text-center">🛑 قرار الهوست 🛑</h2>
+          <p className="text-lg mb-4 text-center">انتهى التصويت. المرجو اتخاذ قرار الطرد:</p>
+
+          <div className="bg-slate-800 p-4 rounded-xl mb-6">
+            <h3 className="text-xl font-semibold mb-3">نتائج التصويت:</h3>
+            {candidates.length > 0 ? candidates.map(c => (
+              <div key={c.id} className="flex justify-between items-center border-b border-slate-700 py-2">
+                <span>{c.name}</span>
+                <span className="text-yellow-400 font-bold">{c.votes} صوت</span>
+              </div>
+            )) : <p className="text-slate-400">لم يتم التصويت.</p>}
+          </div>
+
+          <div className="space-y-4">
+            {candidates.length > 0 && candidates.map(c => (
+              <button
+                key={c.id}
+                onClick={() => hostMakeDecision('KICK', c.id)}
+                className="w-full bg-red-700 hover:bg-red-800 py-3 rounded-lg font-bold transition"
+              >
+                طرد اللاعب: {c.name} ({c.votes} صوت)
+              </button>
+            ))}
+
+            <button
+              onClick={() => hostMakeDecision('SKIP')}
+              className="w-full bg-green-700 hover:bg-green-800 py-3 rounded-lg font-bold transition"
+            >
+              تخطي الجولة (لا طرد)
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (view === 'LOGIN') {
     return (
@@ -115,7 +194,7 @@ export default function App() {
             className="w-full p-3 mb-4 rounded bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500"
             placeholder="أدخل اسمك"
             value={name}
-            onChange={e => setName(e.target.value)}
+            onChange={handleNameChange} // ربط دالة حفظ الاسم
           />
           <button onClick={createRoom} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded mb-3 transition">إنشاء غرفة جديدة</button>
 
@@ -213,6 +292,17 @@ export default function App() {
           </div>
         )}
 
+        {phase === 'DAY_VOTING' && myPlayer?.isHost && (
+          <div className="text-center mb-4">
+            <button
+              onClick={endVotingHost}
+              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition"
+            >
+              إنهاء التصويت (تحديد المطرود)
+            </button>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {players.map(p => (
             <div
@@ -228,6 +318,12 @@ export default function App() {
               <div className="text-4xl text-center mb-2">{p.isAlive ? (p.avatar < 5 ? '👨' : '👩') : '💀'}</div>
               <div className="text-center font-bold">{p.name}</div>
               {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center text-red-500 font-bold text-2xl rotate-12 border-4 border-red-500 rounded-xl">ميت</div>}
+
+              {phase === 'DAY_VOTING' && currentVotes[p.id] && (
+                <span className="absolute top-0 left-0 bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded-br-lg">
+                  صوت!
+                </span>
+              )}
             </div>
           ))}
         </div>
