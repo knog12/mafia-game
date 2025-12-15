@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
-import { Howl } from 'howler';
+import { Howl, Howler } from 'howler';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // **مهم:** ضع رابط سيرفرك (Render) الخاص بك هنا
-// مثال: https://mafia-game-dpfv.onrender.com
 const socket = io('https://mafia-game-dpfv.onrender.com');
 
 // مكتبة الأصوات (تعتمد على وجود ملفات الصوت في client/public/sounds)
@@ -19,7 +18,7 @@ const sounds = {
 };
 
 export default function App() {
-  // **التعديل لحل مشكلة الأصوات:** حالة للتحقق من تفاعل المستخدم مع الصوت
+  // حل مشكلة الأصوات: يتطلب ضغطاً من المستخدم أولاً
   const [audioReady, setAudioReady] = useState(false);
   const [view, setView] = useState('LOGIN');
   const [roomId, setRoomId] = useState('');
@@ -61,7 +60,6 @@ export default function App() {
     });
 
     socket.on('play_audio', (key) => {
-      // شغل الصوت فقط إذا كان المستخدم قد ضغط على زر التفعيل
       if (audioReady && sounds[key]) sounds[key].play();
     });
 
@@ -81,7 +79,7 @@ export default function App() {
     });
 
     return () => socket.off();
-  }, [audioReady]); // أضفنا audioReady هنا لضمان عمل useEffect مع التغيير
+  }, [audioReady]);
 
   const createRoom = () => {
     if (!name) return alert('اكتب اسمك أولاً');
@@ -107,7 +105,7 @@ export default function App() {
     }
   };
 
-  // === التحقق من تفعيل الصوت أولاً ===
+  // === شاشة تفعيل الصوت (تظهر أولاً) ===
   if (!audioReady) {
     return (
       <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
@@ -122,10 +120,8 @@ export default function App() {
       </div>
     );
   }
-  // === نهاية التحقق من تفعيل الصوت ===
+  // ======================================
 
-
-  // --- شاشات اللعبة ---
 
   if (view === 'LOGIN') {
     return (
@@ -167,7 +163,7 @@ export default function App() {
             {players.map(p => (
               <div key={p.id} className="bg-slate-800 p-4 rounded border border-slate-700 flex flex-col items-center">
                 <div className="w-12 h-12 bg-slate-600 rounded-full mb-2 flex items-center justify-center text-xl">👤</div>
-                <span className="font-bold">{p.name}</span>
+                {p.name}
                 {p.isHost && <span className="text-xs text-yellow-400 mt-1">HOST</span>}
               </div>
             ))}
@@ -184,8 +180,6 @@ export default function App() {
     );
   }
 
-  // --- داخل اللعبة ---
-
   const isNight = phase.includes('NIGHT');
   const myTurn = (phase === 'NIGHT_MAFIA' && myPlayer.role === 'MAFIA') ||
     (phase === 'NIGHT_NURSE' && myPlayer.role === 'DOCTOR') ||
@@ -195,7 +189,6 @@ export default function App() {
   return (
     <div className={`min-h-screen transition-colors duration-1000 ${isNight ? 'bg-black text-slate-300' : 'bg-sky-100 text-slate-800'}`}>
 
-      {/* شاشة المعلومات العلوية */}
       <div className={`p-4 shadow-md ${isNight ? 'bg-slate-900' : 'bg-white'} flex justify-between items-center sticky top-0 z-10`}>
         <div>
           <h2 className="text-lg font-bold">أنت: <span className="text-blue-500">{myPlayer.name}</span></h2>
@@ -207,7 +200,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* رسائل النظام */}
       <AnimatePresence>
         {msg && (
           <motion.div
@@ -223,10 +215,8 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* منطقة اللعب */}
       <div className="p-4 max-w-4xl mx-auto mt-4">
 
-        {/* شاشة الليل المظلمة لغير أصحاب الدور */}
         {isNight && !myTurn && myPlayer.isAlive && (
           <div className="fixed inset-0 bg-black z-40 flex flex-col items-center justify-center">
             <div className="text-6xl mb-4">😴</div>
@@ -234,7 +224,6 @@ export default function App() {
           </div>
         )}
 
-        {/* نتيجة التحقيق للشايب */}
         {investigation && (
           <div className="bg-purple-900 text-white p-4 rounded mb-4 text-center border-2 border-purple-500 animate-bounce">
             🕵️‍♂️ نتيجة التحقيق: {investigation}
@@ -261,7 +250,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* شريط الحالة السفلي */}
       <div className={`fixed bottom-0 w-full p-4 text-center ${isNight ? 'bg-slate-900 text-slate-400' : 'bg-white text-slate-600'} border-t`}>
         {myPlayer.isAlive ?
           (myTurn ? <span className="text-green-500 font-bold text-xl animate-pulse">⚡ دورك الآن! اختر لاعباً</span> : "انتظر دورك...")
