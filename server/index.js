@@ -1,5 +1,5 @@
 const express = require('express');
-const http = require('http');
+const http = require = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
@@ -7,19 +7,16 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 app.use(cors());
 
-// **مهم:** ضع رابط الواجهة (Vercel) الخاص بك هنا
-// مثال: https://mafia-game-xxx.vercel.app
+// **مهم:** ضع رابط الواجهة (Vercel) الخاص بك هنا (مثال فقط)
 const VERCEL_URL = 'https://mafia-game.vercel.app';
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    // يسمح بالاتصال من الواجهة المنشورة ومن البيئة المحلية للتطوير
     origin: [VERCEL_URL, "http://localhost:5173"],
     methods: ["GET", "POST"],
     credentials: true
   },
-  // **الحل الحاسم لمشكلة اتصال الجوالات:** يفرض استخدام بروتوكولات الاتصال الأكثر استقراراً.
   transports: ['websocket', 'polling']
 });
 
@@ -37,6 +34,7 @@ const PHASES = {
   DAY_RESULTS: 'DAY_RESULTS',
   DAY_DISCUSSION: 'DAY_DISCUSSION',
   DAY_VOTING: 'DAY_VOTING',
+  HOST_DECISION: 'HOST_DECISION', // مرحلة جديدة لقرار الهوست
   GAME_OVER: 'GAME_OVER'
 };
 
@@ -68,7 +66,6 @@ io.on('connection', (socket) => {
       winner: null
     };
     socket.join(roomId);
-    // نثبت الهوست لضمان عمل زر "ابدأ اللعبة" على الجوال (التعديل الجذري)
     rooms[roomId].players.push({
       id: socket.id,
       name: playerName,
@@ -106,7 +103,6 @@ io.on('connection', (socket) => {
   // 3. بدء اللعبة (توزيع الأدوار)
   socket.on('start_game', ({ roomId }) => {
     const room = rooms[roomId];
-    // التأكد من أن الهوست الفعلي هو من ضغط الزر
     const hostPlayer = room.players.find(p => p.id === socket.id && p.isHost);
     if (!room || !hostPlayer) return;
 
@@ -227,7 +223,7 @@ io.on('connection', (socket) => {
           timeLeft--;
           if (timeLeft < 0) {
             clearInterval(timer);
-            startVoting(roomId);
+            startVoting(roomId); // ينتقل لـ DAY_VOTING
           }
         }, 1000);
       }
@@ -239,40 +235,76 @@ io.on('connection', (socket) => {
     rooms[roomId].votes = {};
   }
 
-  // استقبال التصويت
+  // استقبال التصويت (لا تتم المعالجة التلقائية بعد الآن)
   socket.on('vote_player', ({ roomId, targetId }) => {
     const room = rooms[roomId];
     if (room.phase !== PHASES.DAY_VOTING) return;
 
+    // يقوم اللاعب بالتصويت ويتم حفظ التصويت فوراً
     room.votes[socket.id] = targetId;
 
-    const alivePlayers = room.players.filter(p => p.isAlive).length;
-    if (Object.keys(room.votes).length >= alivePlayers) {
-      processVoting(roomId);
-    }
+    // إرسال تحديث للهوست (وشاشة التصويت)
+    io.to(roomId).emit('update_votes', room.votes);
+
+    // هنا لا يتم استدعاء processVoting تلقائياً، بل ننتظر قرار الهوست
   });
 
-  function processVoting(roomId) {
-    const room = rooms[roomId];
-    const voteCounts = {};
+  // عند انتهاء مهلة التصويت (إذا أردنا إضافة مؤقت للتصويت)
+  // نعتبر أن انتهاء مهلة النقاش هو المهلة الوحيدة، وبعدها نرسل النتائج للهوست
 
+  // دالة خاصة لإرسال النتائج للهوست لاتخاذ القرار
+  function processVotingForHost(roomId) {
+    const room = rooms[roomId];
+    updatePhase(roomId, PHASES.HOST_DECISION); // مرحلة جديدة
+
+    const voteCounts = {};
     Object.values(room.votes).forEach(targetId => {
       voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
     });
 
+    // إيجاد أكثر شخص حصل على تصويت
     let maxVotes = 0;
-    let kickedId = null;
+    let candidateId = null;
     for (const [id, count] of Object.entries(voteCounts)) {
       if (count > maxVotes) {
         maxVotes = count;
-        kickedId = id;
+        candidateId = id;
       }
     }
 
-    if (kickedId) {
-      const pIndex = room.players.findIndex(p => p.id === kickedId);
-      room.players[pIndex].isAlive = false;
-      io.to(roomId).emit('player_kicked', { name: room.players[pIndex].name });
+    const candidate = room.players.find(p => p.id === candidateId);
+
+    // إرسال النتائج للهوست فقط
+    io.to(room.hostId).emit('host_needs_decision', {
+      candidateName: candidate ? candidate.name : 'لا يوجد مرشح واضح',
+      candidateId: candidateId,
+      voteCounts: voteCounts,
+      players: room.players // لإظهار قائمة اللاعبين
+    });
+  }
+
+  // ربط انتهاء التصويت بدالة الإرسال للهوست
+  socket.on('end_voting_host', ({ roomId }) => {
+    const room = rooms[roomId];
+    if (!room || socket.id !== room.hostId) return; // تأكد أنه الهوست
+
+    processVotingForHost(roomId);
+  });
+
+  // قرار الهوست النهائي (إما طرد أو سكب)
+  socket.on('host_made_decision', ({ roomId, decision, kickedPlayerId }) => {
+    const room = rooms[roomId];
+    if (!room || socket.id !== room.hostId || room.phase !== PHASES.HOST_DECISION) return;
+
+    if (decision === 'KICK') {
+      const pIndex = room.players.findIndex(p => p.id === kickedPlayerId);
+      if (pIndex !== -1) {
+        room.players[pIndex].isAlive = false;
+        io.to(roomId).emit('player_kicked', { name: room.players[pIndex].name });
+        io.to(roomId).emit('game_message', `قرر الهوست طرد اللاعب: ${room.players[pIndex].name}`);
+      }
+    } else if (decision === 'SKIP') {
+      io.to(roomId).emit('game_message', 'قرر الهوست عدم طرد أحد هذه الجولة.');
     }
 
     checkWinCondition(roomId);
@@ -282,7 +314,8 @@ io.on('connection', (socket) => {
         startNightCycle(roomId);
       }, 5000);
     }
-  }
+  });
+
 
   function checkWinCondition(roomId) {
     const room = rooms[roomId];
