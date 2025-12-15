@@ -3,10 +3,10 @@ import io from 'socket.io-client';
 import { Howl } from 'howler';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// الاتصال بالسيرفر
+// **مهم:** ضع رابط سيرفرك على Render هنا:
 const socket = io('https://mafia-game-dpfv.onrender.com');
 
-// مكتبة الأصوات (تأكد من وجود ملفات الصوت لاحقاً أو استبدلها بروابط)
+// مكتبة الأصوات (تعتمد على وجود ملفات الصوت في client/public/sounds)
 const sounds = {
   everyone_sleep: new Howl({ src: ['/sounds/sleep.mp3'] }),
   mafia_wake: new Howl({ src: ['/sounds/mafia.mp3'] }),

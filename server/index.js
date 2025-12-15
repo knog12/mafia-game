@@ -7,10 +7,14 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 app.use(cors());
 
+// **مهم:** تأكد أن هذا الرابط هو رابط سيرفرك على Render
+// مثال: const socket = io('https://mafia-game-dpfv.onrender.com');
+const RENDER_SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // يسمح بدخول الجميع
+    origin: RENDER_SERVER_URL, // يسمح بالاتصال من رابط الواجهة المنشور
     methods: ["GET", "POST"]
   }
 });
@@ -60,14 +64,14 @@ io.on('connection', (socket) => {
       winner: null
     };
     socket.join(roomId);
-    // نضيف الهوست كلاعب
+    // نضيف الهوست كلاعب (التعديل الجذري لضمان عمل الزر على الجوال)
     rooms[roomId].players.push({
       id: socket.id,
       name: playerName,
-      role: 'HOST', // الهوست في البداية ماله دور
+      role: 'PENDING', // نجعله Pending لتوحيد الأدوار قبل بدء اللعبة
       isAlive: true,
       avatar: Math.floor(Math.random() * 10), // صورة عشوائية
-      isHost: true,
+      isHost: true, // الأهم: نثبت أنه الهوست
       hasSelfHealed: false // خاص بالممرضة
     });
     socket.emit('room_created', roomId);
@@ -99,7 +103,10 @@ io.on('connection', (socket) => {
   // 3. بدء اللعبة (توزيع الأدوار)
   socket.on('start_game', ({ roomId }) => {
     const room = rooms[roomId];
-    if (!room || socket.id !== room.hostId) return;
+
+    // **التعديل الثاني:** التحقق من دور الهوست الفعلي
+    const hostPlayer = room.players.find(p => p.id === socket.id && p.isHost);
+    if (!room || !hostPlayer) return;
 
     const playerCount = room.players.length;
     let mafiaCount = playerCount < 9 ? 1 : 2;
