@@ -4,7 +4,7 @@ import { Howl } from 'howler';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // الاتصال بالسيرفر
-const socket = io('http://localhost:3001');
+const socket = io('https://mafia-game-dpfv.onrender.com');
 
 // مكتبة الأصوات (تأكد من وجود ملفات الصوت لاحقاً أو استبدلها بروابط)
 const sounds = {
