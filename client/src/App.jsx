@@ -19,6 +19,8 @@ const sounds = {
 };
 
 export default function App() {
+  // **التعديل لحل مشكلة الأصوات:** حالة للتحقق من تفاعل المستخدم مع الصوت
+  const [audioReady, setAudioReady] = useState(false);
   const [view, setView] = useState('LOGIN');
   const [roomId, setRoomId] = useState('');
   const [name, setName] = useState('');
@@ -59,7 +61,8 @@ export default function App() {
     });
 
     socket.on('play_audio', (key) => {
-      if (sounds[key]) sounds[key].play();
+      // شغل الصوت فقط إذا كان المستخدم قد ضغط على زر التفعيل
+      if (audioReady && sounds[key]) sounds[key].play();
     });
 
     socket.on('day_result', ({ msg, players }) => {
@@ -78,7 +81,7 @@ export default function App() {
     });
 
     return () => socket.off();
-  }, []);
+  }, [audioReady]); // أضفنا audioReady هنا لضمان عمل useEffect مع التغيير
 
   const createRoom = () => {
     if (!name) return alert('اكتب اسمك أولاً');
@@ -103,6 +106,24 @@ export default function App() {
       socket.emit('player_action', { roomId, action: 'USE_ABILITY', targetId });
     }
   };
+
+  // === التحقق من تفعيل الصوت أولاً ===
+  if (!audioReady) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
+        <h1 className="text-3xl font-bold mb-4">🎵 تفعيل الصوت 🎵</h1>
+        <p className="mb-6 text-slate-400">يرجى الضغط لتشغيل صوت اللعبة</p>
+        <button
+          onClick={() => { setAudioReady(true); Howler.mute(false); }}
+          className="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-8 rounded transition"
+        >
+          تشغيل 🔊
+        </button>
+      </div>
+    );
+  }
+  // === نهاية التحقق من تفعيل الصوت ===
+
 
   // --- شاشات اللعبة ---
 
