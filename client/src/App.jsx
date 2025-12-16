@@ -188,8 +188,8 @@ export default function App() {
   // 1. LOGIN VIEW
   if (view === 'LOGIN') {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 dir-rtl relative overflow-hidden text-white font-sans">
-        <div className="absolute inset-0 bg-gradient-radial from-slate-900 to-black z-0" />
+      <div className="min-h-screen bg-lime-500 flex items-center justify-center p-4 dir-rtl relative overflow-hidden text-white font-sans">
+        <div className="absolute inset-0 bg-gradient-radial from-lime-400 to-green-600 z-0" />
 
         <div className="z-10 w-full max-w-md flex flex-col items-center">
           <h1 className="text-8xl font-black mb-4 text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 to-cyan-500 drop-shadow-2xl">
