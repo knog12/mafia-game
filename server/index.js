@@ -51,6 +51,12 @@ io.on('connection', (socket) => {
 
   // 1. إنشاء غرفة
   socket.on('create_room', ({ playerName, playerId }) => {
+    // التحقق من البيانات
+    if (!playerId) {
+      socket.emit('error', 'Missing Player ID');
+      return;
+    }
+
     const roomId = uuidv4().substring(0, 4).toUpperCase();
     rooms[roomId] = {
       id: roomId,
@@ -79,6 +85,7 @@ io.on('connection', (socket) => {
     rooms[roomId].players.push(newHost);
     socket.emit('room_created', roomId);
     io.to(roomId).emit('update_players', rooms[roomId].players);
+    console.log(`Room ${roomId} created by ${playerName} (${playerId})`);
   });
 
   // 2. دخول غرفة / إعادة الاتصال (Persistence)
@@ -89,16 +96,23 @@ io.on('connection', (socket) => {
       return;
     }
 
-    socket.join(roomId);
+    if (!playerId) {
+      socket.emit('error', 'Missing Player ID');
+      return;
+    }
 
     // التحقق هل اللاعب موجود مسبقاً (إعادة اتصال)
+    // نستخدم findIndex للبحث عن ID المطابق
     const existingPlayerIndex = room.players.findIndex(p => p.id === playerId);
 
     if (existingPlayerIndex !== -1) {
+      socket.join(roomId);
       // تحديث الـ socketId للاعب العائد
       room.players[existingPlayerIndex].socketId = socket.id;
+      // تحديث الاسم إذا تغير (اختياري)
+      if (playerName) room.players[existingPlayerIndex].name = playerName;
 
-      console.log(`Player ${playerName} reconnected.`);
+      console.log(`Player ${playerName} (${playerId}) reconnected to ${roomId}.`);
 
       // إرسال حالة اللعبة الحالية للاعب العائد
       socket.emit('game_state_update', { phase: room.phase });
@@ -106,7 +120,7 @@ io.on('connection', (socket) => {
         player: room.players[existingPlayerIndex],
         players: room.players
       });
-      // تحديث القائمة للجميع للتأكد
+      // تحديث القائمة للجميع
       io.to(roomId).emit('update_players', room.players);
     } else {
       // لاعب جديد
@@ -115,19 +129,25 @@ io.on('connection', (socket) => {
         return;
       }
 
+      socket.join(roomId);
+
+      // التأكد من عدم وجود "شبح" بنفس الاسم (اختياري، لكن مفيد لمنع التكرار البصري)
+      // لكننا نعتمد على ID، فالاسم مكرر مسموح
+
       const newPlayer = {
         id: playerId,
         socketId: socket.id,
         name: playerName,
         role: 'PENDING',
         isAlive: true,
-        avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
+        avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)], // تأكيد استخدام الإيموجي
         isHost: false,
         hasSelfHealed: false
       };
 
       room.players.push(newPlayer);
       io.to(roomId).emit('update_players', room.players);
+      console.log(`Player ${playerName} (${playerId}) joined ${roomId}.`);
     }
   });
 
@@ -141,7 +161,7 @@ io.on('connection', (socket) => {
     if (!sender || sender.id !== room.hostId) return;
 
     if (room.players.length < 3) {
-      // يمكن تفعيل التحقق هنا
+      // socket.emit('error', 'العدد غير كافٍ');
     }
 
     const playerCount = room.players.length;

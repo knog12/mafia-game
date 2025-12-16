@@ -44,12 +44,13 @@ export default function App() {
     }
     setPlayerId(storedId);
 
-    // 2. محاولة إعادة الاتصال إذا كانت الغرفة محفوظة (اختياري، لكن مفيد)
-    // const savedRoom = localStorage.getItem('mafia_savedRoom');
-    // if (savedRoom && name) {
-    //    setRoomId(savedRoom);
-    //    socket.emit('join_room', { roomId: savedRoom, playerName: name, playerId: storedId });
-    // }
+    // 2. محاولة إعادة الاتصال التلقائية
+    const savedRoom = localStorage.getItem('mafia_savedRoom');
+    if (savedRoom && storedId && name) {
+      console.log('Attempting auto-reconnect:', { savedRoom, name, storedId });
+      setRoomId(savedRoom);
+      socket.emit('join_room', { roomId: savedRoom, playerName: name, playerId: storedId });
+    }
 
     socket.on('room_created', (id) => {
       setRoomId(id);
@@ -65,9 +66,11 @@ export default function App() {
     });
 
     socket.on('player_reconnected', ({ player, players }) => {
+      console.log('Successfully reconnected!');
       setMyPlayer(player);
       setPlayers(players);
       setView(player.phase === 'LOBBY' ? 'LOBBY' : 'GAME');
+      if (player.phase !== 'LOBBY') setPhase(player.phase || 'GAME');
     });
 
     socket.on('game_state_update', ({ phase }) => {
@@ -116,13 +119,23 @@ export default function App() {
       setMsg(winner === 'MAFIA' ? 'انتصرت المافيا!' : 'انتصر المواطنون!');
     });
 
+    // إضافة رسالة خطأ
+    socket.on('error', (err) => {
+      console.error('Socket Error:', err);
+      if (err === 'الغرفة غير موجودة' || err.includes('اللعبة بدأت')) {
+        localStorage.removeItem('mafia_savedRoom'); // مسح الغرفة الفاسدة
+        setView('LOGIN');
+      }
+      alert(err);
+    });
+
     return () => socket.off();
   }, [playerId, name]);
 
   const handleNameChange = (e) => {
     const newName = e.target.value;
     setName(newName);
-    localStorage.setItem('mafia_playerName', newName);
+    localStorage.setItem('mafia_playerName', newName); // حفظ الاسم
   };
 
   const createRoom = () => {
