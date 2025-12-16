@@ -58,6 +58,13 @@ export default function App() {
       setView('LOBBY');
     });
 
+    // **إصلاح مشكلة الدخول**: الانتقال للوبي عند نجاح الانضمام
+    socket.on('joined_room', (id) => {
+      setRoomId(id);
+      localStorage.setItem('mafia_savedRoom', id);
+      setView('LOBBY');
+    });
+
     socket.on('update_players', (list) => {
       setPlayers(list);
       // البحث عن نفسي باستخدام playerId الثابت
@@ -119,11 +126,10 @@ export default function App() {
       setMsg(winner === 'MAFIA' ? 'انتصرت المافيا!' : 'انتصر المواطنون!');
     });
 
-    // إضافة رسالة خطأ
     socket.on('error', (err) => {
       console.error('Socket Error:', err);
       if (err === 'الغرفة غير موجودة' || err.includes('اللعبة بدأت')) {
-        localStorage.removeItem('mafia_savedRoom'); // مسح الغرفة الفاسدة
+        localStorage.removeItem('mafia_savedRoom');
         setView('LOGIN');
       }
       alert(err);
@@ -135,7 +141,7 @@ export default function App() {
   const handleNameChange = (e) => {
     const newName = e.target.value;
     setName(newName);
-    localStorage.setItem('mafia_playerName', newName); // حفظ الاسم
+    localStorage.setItem('mafia_playerName', newName);
   };
 
   const createRoom = () => {
@@ -153,18 +159,15 @@ export default function App() {
     socket.emit('start_game', { roomId });
   };
 
-  // الأكشن الليلي (مافيا، دكتور، محقق)
   const sendAction = (targetId) => {
     if (!myPlayer || !myPlayer.isAlive) return;
     socket.emit('player_action', { roomId, action: 'USE_ABILITY', targetId });
   };
 
-  // **صلاحية الهوست**: طرد لاعب أو تخطي (أثناء النهار)
   const hostDayAction = (action, targetId = null) => {
     socket.emit('host_action_day', { roomId, action, targetId });
   };
 
-  // **قائمة الآدمن**: طرد من الغرفة
   const adminKick = (targetId) => {
     if (confirm('هل أنت متأكد من طرد هذا اللاعب نهائياً من الغرفة؟')) {
       socket.emit('admin_kick_player', { roomId, targetId });
@@ -173,30 +176,54 @@ export default function App() {
 
   // --- الرندر ---
 
-  // 1. شاشة الدخول
+  // 1. شاشة الدخول (تصميم الحوش)
   if (view === 'LOGIN') {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
-        <h1 className="text-4xl font-bold mb-8 text-red-500 tracking-wider">MAFIA ONLINE</h1>
-        <div className="bg-slate-800 p-8 rounded-xl shadow-2xl w-full max-w-md border border-slate-700">
-          <input
-            className="w-full p-3 mb-4 rounded bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500"
-            placeholder="أدخل اسمك"
-            value={name}
-            onChange={handleNameChange}
-          />
-          <button onClick={createRoom} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded mb-3 transition">إنشاء غرفة جديدة</button>
+      <div className="min-h-screen bg-[#111827] flex flex-col items-center justify-center p-4 font-sans dir-rtl">
+        {/* العنوان */}
+        <h1 className="text-6xl font-extrabold mb-12 text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 drop-shadow-lg tracking-wide">
+          الحوش
+        </h1>
 
-          <div className="flex gap-2">
+        <div className="bg-[#1f2937] p-8 rounded-2xl shadow-2xl w-full max-w-md border border-[#374151]">
+
+          <div className="mb-6">
+            <label className="block text-slate-400 mb-2 text-right">أسمك:</label>
             <input
-              className="flex-1 p-3 rounded bg-slate-700 text-white placeholder-slate-400"
-              placeholder="رمز الغرفة"
+              className="w-full p-4 rounded-xl bg-[#374151] text-white placeholder-slate-500 text-center focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all border border-slate-600"
+              placeholder="اكتب اسمك هنا"
+              value={name}
+              onChange={handleNameChange}
+            />
+          </div>
+
+          <button
+            onClick={createRoom}
+            className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white font-bold py-4 rounded-xl mb-6 shadow-lg transform transition active:scale-95 flex justify-center items-center gap-2"
+          >
+            إنشاء لعبة جديدة 🎮
+          </button>
+
+          <div className="w-full h-px bg-slate-600 mb-6"></div>
+
+          <div className="flex gap-3">
+            <input
+              className="flex-1 p-4 rounded-xl bg-[#374151] text-white placeholder-slate-500 text-center border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 uppercase font-mono tracking-widest"
+              placeholder="CODE"
               value={roomId}
               onChange={e => setRoomId(e.target.value)}
             />
-            <button onClick={joinRoom} className="bg-blue-600 hover:bg-blue-700 px-6 rounded font-bold transition">دخول</button>
+            <button
+              onClick={joinRoom}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-8 rounded-xl font-bold py-4 shadow-lg transition active:scale-95"
+            >
+              دخول
+            </button>
           </div>
+
         </div>
+
+        <p className="mt-8 text-slate-500 text-sm">Mafia Game &copy; 2025</p>
       </div>
     );
   }
@@ -223,27 +250,27 @@ export default function App() {
             </div>
           )}
 
-          <div className="flex justify-between items-center mb-8 bg-slate-800 p-4 rounded-lg mt-12">
+          <div className="flex justify-between items-center mb-8 bg-slate-800 p-4 rounded-lg mt-12 border border-slate-700">
             <h2 className="text-xl">رمز الغرفة: <span className="text-green-400 font-mono text-2xl tracking-widest">{roomId}</span></h2>
             <div className="bg-blue-900 px-3 py-1 rounded-full text-sm">اللاعبون: {players.length}</div>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
             {players.map(p => (
-              <div key={p.id} className="bg-slate-800 p-4 rounded border border-slate-700 flex flex-col items-center">
-                <div className="text-4xl mb-2">{p.avatar}</div>
-                <div className="font-bold">{p.name}</div>
-                {p.isHost && <span className="text-xs text-yellow-400 mt-1">HOST</span>}
+              <div key={p.id} className="bg-slate-800 p-4 rounded-xl border border-slate-700 flex flex-col items-center shadow-md">
+                <div className="text-5xl mb-3">{p.avatar}</div>
+                <div className="font-bold text-lg">{p.name}</div>
+                {p.isHost && <span className="text-xs bg-yellow-500/20 text-yellow-500 px-2 py-0.5 rounded mt-1 border border-yellow-500/50">Leader</span>}
               </div>
             ))}
           </div>
 
           {myPlayer?.isHost && (
-            <button onClick={startGame} className="w-full bg-green-600 hover:bg-green-700 py-4 rounded-xl text-xl font-bold shadow-lg transform active:scale-95 transition">
+            <button onClick={startGame} className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 py-4 rounded-xl text-xl font-bold shadow-lg transform active:scale-95 transition">
               ابدأ اللعبة 🎮
             </button>
           )}
-          {!myPlayer?.isHost && <p className="text-center text-slate-400 animate-pulse">في انتظار الهوست لبدء اللعبة...</p>}
+          {!myPlayer?.isHost && <div className="text-center p-8 bg-slate-800/50 rounded-xl border border-slate-700 animate-pulse text-slate-400">في انتظار الهوست لبدء اللعبة...</div>}
         </div>
       </div>
     );
@@ -251,7 +278,6 @@ export default function App() {
 
   // 3. اللعبة
   const isNight = phase.includes('NIGHT');
-  // دورك إذا كان الليل ودورك، أو إذا كان النهار وأنت الهوست (للقرار)
   const myNightTurn = (phase === 'NIGHT_MAFIA' && myPlayer.role === 'MAFIA') ||
     (phase === 'NIGHT_NURSE' && myPlayer.role === 'DOCTOR') ||
     (phase === 'NIGHT_DETECTIVE' && myPlayer.role === 'DETECTIVE');
@@ -320,7 +346,6 @@ export default function App() {
           </div>
         )}
 
-        {/* لوحة تحكم الهوست في النهار */}
         {isDayDiscussion && myPlayer.isHost && (
           <div className="bg-slate-800 text-white p-4 rounded-xl mb-6 border-2 border-red-500 shadow-lg">
             <h3 className="text-center text-xl font-bold mb-4 text-red-400">💀 تحكم الهوست (النهار) 💀</h3>
@@ -355,7 +380,6 @@ export default function App() {
               <div className="text-center font-bold">{p.name}</div>
               {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center text-red-500 font-bold text-2xl rotate-12 border-4 border-red-500 rounded-xl">ميت</div>}
 
-              {/* أيقونة الطرد تظهر للهوست في النهار فوق اللاعب */}
               {myHostTurn && p.isAlive && (
                 <div className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1 text-xs shadow-sm">
                   ❌ طرد

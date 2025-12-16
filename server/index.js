@@ -84,6 +84,8 @@ io.on('connection', (socket) => {
 
     rooms[roomId].players.push(newHost);
     socket.emit('room_created', roomId);
+    // تأكيد الانضمام أيضاً للهوست
+    socket.emit('joined_room', roomId);
     io.to(roomId).emit('update_players', rooms[roomId].players);
     console.log(`Room ${roomId} created by ${playerName} (${playerId})`);
   });
@@ -102,7 +104,6 @@ io.on('connection', (socket) => {
     }
 
     // التحقق هل اللاعب موجود مسبقاً (إعادة اتصال)
-    // نستخدم findIndex للبحث عن ID المطابق
     const existingPlayerIndex = room.players.findIndex(p => p.id === playerId);
 
     if (existingPlayerIndex !== -1) {
@@ -120,6 +121,8 @@ io.on('connection', (socket) => {
         player: room.players[existingPlayerIndex],
         players: room.players
       });
+      socket.emit('joined_room', roomId); // <-- FIX: Redirect client
+
       // تحديث القائمة للجميع
       io.to(roomId).emit('update_players', room.players);
     } else {
@@ -131,21 +134,19 @@ io.on('connection', (socket) => {
 
       socket.join(roomId);
 
-      // التأكد من عدم وجود "شبح" بنفس الاسم (اختياري، لكن مفيد لمنع التكرار البصري)
-      // لكننا نعتمد على ID، فالاسم مكرر مسموح
-
       const newPlayer = {
         id: playerId,
         socketId: socket.id,
         name: playerName,
         role: 'PENDING',
         isAlive: true,
-        avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)], // تأكيد استخدام الإيموجي
+        avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
         isHost: false,
         hasSelfHealed: false
       };
 
       room.players.push(newPlayer);
+      socket.emit('joined_room', roomId); // <-- FIX: Redirect client
       io.to(roomId).emit('update_players', room.players);
       console.log(`Player ${playerName} (${playerId}) joined ${roomId}.`);
     }
