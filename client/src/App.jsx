@@ -5,8 +5,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 
 // === CONFIG ===
+// Ensure this matches your server URL exactly.
 const SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
-const socket = io(SERVER_URL);
+const socket = io(SERVER_URL, {
+  transports: ['websocket', 'polling'],
+  withCredentials: true
+});
 
 // === SOUNDS ===
 const sounds = {
@@ -21,84 +25,75 @@ const sounds = {
 
 export default function App() {
   // === STATE ===
-  const [playerId, setPlayerId] = useState('');
-  const [name, setName] = useState('');
+  // Initialize playerId from localStorage immediately to prevent sync issues
+  const [playerId] = useState(() => {
+    let stored = localStorage.getItem('mafia_playerId');
+    if (!stored) {
+      stored = uuidv4();
+      localStorage.setItem('mafia_playerId', stored);
+    }
+    return stored;
+  });
+
+  const [name, setName] = useState(() => localStorage.getItem('mafia_playerName') || '');
   const [roomId, setRoomId] = useState('');
   const [view, setView] = useState('LOGIN'); // LOGIN | LOBBY | GAME
   const [players, setPlayers] = useState([]);
-  const [myPlayer, setMyPlayer] = useState(null);
   const [phase, setPhase] = useState('LOBBY');
   const [msg, setMsg] = useState('');
   const [investigationResult, setInvestigationResult] = useState(null);
-
-  // Admin Menu
   const [showAdminMenu, setShowAdminMenu] = useState(false);
 
-  // === INIT & EFFECTS ===
+  // Derived State for "My Player"
+  const myPlayer = players.find(p => p.id === playerId);
+
+  // === EFFECTS ===
   useEffect(() => {
-    // 1. UUID & LocalStorage Init
-    let storedId = localStorage.getItem('mafia_playerId');
-    if (!storedId) {
-      storedId = uuidv4();
-      localStorage.setItem('mafia_playerId', storedId);
-    }
-    setPlayerId(storedId);
-
-    const storedName = localStorage.getItem('mafia_playerName');
-    if (storedName) setName(storedName);
-
-    // 2. Auto-Reconnect
+    // 1. Auto-Reconnect Attempt
     const savedRoom = localStorage.getItem('mafia_savedRoom');
-    if (savedRoom && storedId && storedName) {
-      console.log('Auto-reconnecting to:', savedRoom);
+    if (savedRoom && playerId && name) {
+      console.log('Reconnecting to room:', savedRoom);
       setRoomId(savedRoom);
-      socket.emit('join_room', { roomId: savedRoom, playerName: storedName, playerId: storedId });
+      socket.emit('reconnect_user', { roomId: savedRoom, playerId, playerName: name });
     }
 
-    // 3. Socket Listeners
-    socket.on('room_created', (id) => {
-      setRoomId(id);
-      localStorage.setItem('mafia_savedRoom', id);
-      setView('LOBBY');
-    });
-
-    socket.on('joined_room', (id) => {
-      setRoomId(id);
-      localStorage.setItem('mafia_savedRoom', id);
-      setView('LOBBY');
+    // 2. Event Listeners
+    socket.on('room_joined', ({ roomId, players, phase }) => {
+      console.log('Joined Room:', roomId);
+      setRoomId(roomId);
+      setPlayers(players);
+      // Determine view based on phase
+      const nextView = (phase === 'LOBBY') ? 'LOBBY' : 'GAME';
+      setView(nextView);
+      setPhase(phase);
+      localStorage.setItem('mafia_savedRoom', roomId);
     });
 
     socket.on('update_players', (list) => {
+      console.log('Players Updated:', list);
       setPlayers(list);
-      // Update myPlayer reference
-      const me = list.find(p => p.id === storedId);
-      if (me) setMyPlayer(me);
-    });
-
-    socket.on('player_reconnected', ({ player, players: list, phase }) => {
-      setMyPlayer(player);
-      setPlayers(list);
-      setPhase(phase);
-      setView(phase === 'LOBBY' ? 'LOBBY' : 'GAME');
-      console.log('Restored State:', phase);
     });
 
     socket.on('game_started', (list) => {
       setPlayers(list);
-      const me = list.find(p => p.id === storedId);
-      if (me) setMyPlayer(me);
       setView('GAME');
     });
 
     socket.on('phase_change', (newPhase) => {
       setPhase(newPhase);
-      setInvestigationResult(null); // Clear old results
+      setInvestigationResult(null);
+    });
+
+    socket.on('game_message', (txt) => {
+      setMsg(txt);
+      setTimeout(() => setMsg(''), 4000);
     });
 
     socket.on('play_audio', (key) => {
-      // Basic stop-all to prevent overlap (Server handles main timing, this is backup)
-      Object.keys(sounds).forEach(k => sounds[k].stop());
-      if (sounds[key]) sounds[key].play();
+      if (sounds[key]) {
+        Object.values(sounds).forEach(s => s.stop());
+        sounds[key].play();
+      }
     });
 
     socket.on('day_result', ({ msg, players: list }) => {
@@ -107,48 +102,46 @@ export default function App() {
       setTimeout(() => setMsg(''), 6000);
     });
 
-    socket.on('game_message', (txt) => {
-      setMsg(txt);
-      setTimeout(() => setMsg(''), 4000);
-    });
-
-    socket.on('investigation_result', (txt) => {
-      setInvestigationResult(txt);
+    socket.on('investigation_result', (res) => {
+      setInvestigationResult(res);
     });
 
     socket.on('game_over', (winner) => {
       setPhase('GAME_OVER');
-      setMsg(`🏆 GAME OVER! Winner: ${winner} 🏆`);
-    });
-
-    socket.on('force_disconnect', () => {
-      localStorage.removeItem('mafia_savedRoom');
-      setRoomId('');
-      setView('LOGIN');
-      alert('You have been kicked by the Host.');
+      setMsg(`انتهت اللعبة! الفائز: ${winner === 'MAFIA' ? 'المافيا 😈' : 'المواطنين 😇'}`);
     });
 
     socket.on('error', (err) => {
-      console.error(err);
-      if (err.includes('الغرفة غير موجودة') || err.includes('started')) {
+      console.error('Socket Error:', err);
+      if (err.includes('not found') || err.includes('started')) {
         localStorage.removeItem('mafia_savedRoom');
         setView('LOGIN');
+        setRoomId('');
       }
       alert(err);
     });
 
-    return () => socket.off();
+    socket.on('force_disconnect', () => {
+      alert('تم طردك من قبل الهوست');
+      localStorage.removeItem('mafia_savedRoom');
+      setView('LOGIN');
+      setRoomId('');
+    });
+
+    return () => {
+      socket.off();
+    };
   }, [playerId]);
 
   // === HANDLERS ===
   const handleCreate = () => {
-    if (!name) return alert('Name Required');
+    if (!name) return alert('الرجاء كتابة الاسم');
     localStorage.setItem('mafia_playerName', name);
     socket.emit('create_room', { playerName: name, playerId });
   };
 
   const handleJoin = () => {
-    if (!name || !roomId) return alert('Name & Code Required');
+    if (!name || !roomId) return alert('الرجاء كتابة الاسم ورمز الغرفة');
     localStorage.setItem('mafia_playerName', name);
     socket.emit('join_room', { roomId, playerName: name, playerId });
   };
@@ -158,165 +151,163 @@ export default function App() {
   };
 
   const handleAction = (targetId) => {
-    if (!myPlayer?.isAlive) return;
-    socket.emit('player_action', { roomId, action: 'USE', targetId });
+    if (myPlayer?.isAlive) {
+      socket.emit('player_action', { roomId, action: 'USE', targetId });
+    }
   };
 
   const handleHostDayAction = (action, targetId = null) => {
     if (!myPlayer?.isHost) return;
-    if (confirm('Are you sure?')) {
-      socket.emit('host_action_day', { roomId, action, targetId });
-    }
+    socket.emit('host_action_day', { roomId, action, targetId });
   };
 
   const handleAdminKick = (targetId) => {
-    if (confirm('Kick this player permanently?')) {
-      socket.emit('admin_kick_player', { roomId, targetId });
-    }
+    socket.emit('admin_kick_player', { roomId, targetId });
   };
 
-  // === RENDER HELPERS ===
+  // === HELPERS ===
   const isNight = phase.includes('NIGHT');
   const isMyTurn = (phase === 'NIGHT_MAFIA' && myPlayer?.role === 'MAFIA') ||
     (phase === 'NIGHT_NURSE' && myPlayer?.role === 'DOCTOR') ||
     (phase === 'NIGHT_DETECTIVE' && myPlayer?.role === 'DETECTIVE');
-
   const isHostDayTurn = (phase === 'DAY_DISCUSSION' && myPlayer?.isHost);
 
   // === VIEWS ===
 
-  // 1. LOGIN VIEW
+  // 1. LOGIN
   if (view === 'LOGIN') {
     return (
       <div className="min-h-screen bg-lime-500 flex items-center justify-center p-4 dir-rtl relative overflow-hidden text-white font-sans">
         <div className="absolute inset-0 bg-gradient-radial from-lime-400 to-green-600 z-0" />
 
         <div className="z-10 w-full max-w-md flex flex-col items-center">
-          <h1 className="text-8xl font-black mb-4 text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 to-cyan-500 drop-shadow-2xl">
+          <h1 className="text-7xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-br from-white to-lime-200 drop-shadow-xl">
             الحوش
           </h1>
-          <p className="tracking-[0.4em] text-cyan-300 opacity-80 mb-12 uppercase">Mafia Night</p>
+          <p className="text-lime-100 mb-8 tracking-widest uppercase font-bold opacity-90">Mafia Online</p>
 
-          <div className="w-full bg-slate-900/60 backdrop-blur-xl border border-slate-700/50 p-8 rounded-3xl shadow-2xl">
+          <div className="bg-white/20 backdrop-blur-md p-8 rounded-3xl shadow-2xl w-full border border-white/30">
             <input
-              className="w-full bg-slate-800 text-white text-center p-4 rounded-xl mb-4 text-xl border border-slate-700 focus:border-pink-500 focus:outline-none transition-colors"
-              placeholder="اسمك المستعار..."
+              className="w-full bg-black/30 text-white text-center p-4 rounded-xl mb-4 text-xl placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-lime-300 transition-all font-bold"
+              placeholder="اسمك المستعار"
               value={name}
               onChange={e => setName(e.target.value)}
             />
 
             <button
               onClick={handleCreate}
-              className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold text-lg shadow-lg hover:brightness-110 active:scale-95 transition-all mb-6"
+              className="w-full py-4 bg-lime-600 hover:bg-lime-700 text-white rounded-xl font-bold text-lg shadow-lg transform active:scale-95 transition-all mb-4 border-b-4 border-lime-800"
             >
-              🎮 إنشاء غرفة
+              إنشاء غرفة جديدة 🎮
             </button>
-
-            <div className="border-t border-slate-700 my-4" />
 
             <div className="flex gap-2">
               <input
-                className="flex-1 bg-slate-800 text-center p-4 rounded-xl border border-slate-700 uppercase font-mono tracking-widest text-lg focus:border-cyan-500 focus:outline-none"
+                className="flex-1 bg-black/30 text-white text-center p-4 rounded-xl placeholder-white/70 font-mono text-lg uppercase focus:outline-none focus:ring-2 focus:ring-lime-300 transition-all"
                 placeholder="CODE"
                 value={roomId}
                 onChange={e => setRoomId(e.target.value)}
               />
               <button
                 onClick={handleJoin}
-                className="px-8 bg-cyan-600 rounded-xl font-bold hover:bg-cyan-500 active:scale-95 transition-all"
+                className="bg-sky-600 hover:bg-sky-700 text-white px-6 rounded-xl font-bold shadow-lg border-b-4 border-sky-800 active:scale-95 transition-all"
               >
                 دخول
               </button>
             </div>
           </div>
+
+          <p className="mt-8 text-lime-900 font-bold opacity-60 text-sm">v4.0 Fixed</p>
         </div>
       </div>
     );
   }
 
-  // 2. LOBBY VIEW
+  // 2. LOBBY
   if (view === 'LOBBY') {
     return (
-      <div className="min-h-screen bg-slate-950 text-white p-6 dir-rtl font-sans bg-[url('/bg-pattern.png')]">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-10">
-          <div className="bg-slate-900 px-6 py-3 rounded-full border border-slate-700 shadow-xl flex gap-3 items-center">
-            <span className="text-slate-400">ROOM:</span>
-            <span className="text-4xl font-mono text-cyan-400 tracking-widest font-black">{roomId}</span>
+      <div className="min-h-screen bg-slate-900 text-white p-6 font-sans dir-rtl">
+        {/* Admin Menu (Host Only) */}
+        {myPlayer?.isHost && (
+          <div className="absolute top-6 left-6 z-50">
+            <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-slate-800 hover:bg-slate-700 p-3 rounded-xl border border-slate-600 text-2xl shadow-lg">
+              ≡
+            </button>
+            {showAdminMenu && (
+              <div className="absolute mt-2 left-0 w-64 bg-slate-900 border border-slate-600 rounded-xl shadow-2xl p-2 z-50">
+                <div className="text-red-400 font-bold text-xs p-2 uppercase">قائمة الطرد</div>
+                {players.filter(p => !p.isHost).map(p => (
+                  <div key={p.id} className="flex justify-between items-center p-2 hover:bg-slate-800 rounded">
+                    <span>{p.name}</span>
+                    <button onClick={() => handleAdminKick(p.id)} className="text-red-500 bg-red-500/10 px-2 py-1 rounded text-xs">طرد</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="max-w-4xl mx-auto text-center mt-10">
+          <div className="inline-block bg-slate-800 px-8 py-4 rounded-full border border-cyan-500/30 shadow-[0_0_20px_rgba(6,182,212,0.2)] mb-8">
+            <span className="text-slate-400">رمز الغرفة:</span>
+            <span className="text-4xl font-mono ml-4 text-cyan-400 font-bold tracking-widest">{roomId}</span>
           </div>
 
-          {myPlayer?.isHost && (
-            <div className="relative z-50">
-              <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-slate-800 p-3 rounded-xl hover:bg-slate-700 border border-slate-600 text-2xl">
-                ≡
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+            {players.map(p => (
+              <motion.div layout key={p.id} className="bg-slate-800/80 p-6 rounded-2xl border border-slate-700 flex flex-col items-center">
+                <div className="text-6xl mb-4 transform hover:scale-110 transition-transform cursor-default">
+                  {p.avatar}
+                </div>
+                <div className="font-bold text-xl">{p.name}</div>
+                {p.isHost && <span className="bg-yellow-500/20 text-yellow-400 text-xs px-2 py-1 rounded-full mt-2 border border-yellow-500/50">LEADER</span>}
+              </motion.div>
+            ))}
+          </div>
+
+          <div className="fixed bottom-10 left-0 w-full flex justify-center px-4">
+            {myPlayer?.isHost ? (
+              <button onClick={handleStart} className="w-full max-w-md py-4 bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl font-bold text-2xl shadow-xl hover:scale-105 transition-transform flex items-center justify-center gap-2">
+                <span>ابدأ اللعبة</span>
+                <span>🚀</span>
               </button>
-              <AnimatePresence>
-                {showAdminMenu && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                    className="absolute left-0 mt-2 w-64 bg-slate-900 border border-slate-600 rounded-xl shadow-2xl p-2"
-                  >
-                    <div className="text-xs text-red-400 font-bold mb-2 px-2 uppercase tracking-wider">Kick Players</div>
-                    {players.filter(p => p.id !== myPlayer?.id).map(p => (
-                      <div key={p.id} className="flex justify-between items-center p-2 hover:bg-slate-800 rounded-lg">
-                        <span>{p.name}</span>
-                        <button onClick={() => handleAdminKick(p.id)} className="bg-red-500/20 text-red-500 px-2 py-1 text-xs rounded border border-red-500/50">Kick</button>
-                      </div>
-                    ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          )}
-        </div>
-
-        {/* Players Grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
-          {players.map(p => (
-            <motion.div layout key={p.id} className="bg-slate-900/50 backdrop-blur border border-slate-800 p-6 rounded-3xl flex flex-col items-center relative overflow-hidden group">
-              <div className="text-7xl mb-4 drop-shadow-lg group-hover:scale-110 transition-transform">{p.avatar}</div>
-              <div className="font-bold text-2xl truncate">{p.name}</div>
-              {p.isHost && <span className="absolute top-4 right-4 bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded-full text-xs border border-yellow-500/50">HOST</span>}
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Start Button */}
-        <div className="fixed bottom-10 left-0 w-full flex justify-center px-4">
-          {myPlayer?.isHost ? (
-            <button onClick={handleStart} className="w-full max-w-lg py-5 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl font-bold text-2xl shadow-2xl shadow-emerald-500/30 hover:scale-105 transition-all">
-              START GAME 🚀
-            </button>
-          ) : (
-            <div className="text-slate-500 animate-pulse text-xl">Waiting for Host...</div>
-          )}
+            ) : (
+              <div className="text-slate-500 font-bold animate-pulse text-xl bg-slate-900/50 px-6 py-3 rounded-full border border-slate-800">
+                بانتظار الهوست...
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
-  // 3. GAME VIEW
+  // 3. GAME
   return (
-    <div className={`min-h-screen transition-colors duration-1000 ${isNight ? 'bg-black' : 'bg-slate-900'} text-white overflow-hidden relative font-sans`}>
+    <div className={`min-h-screen transition-colors duration-2000 ${isNight ? 'bg-black' : 'bg-slate-900'} text-white font-sans relative overflow-hidden dir-rtl`}>
 
-      {/* Top Bar */}
-      <div className="absolute top-0 w-full p-4 z-40 bg-gradient-to-b from-black/80 to-transparent flex justify-between items-start">
+      {/* Top Info */}
+      <div className="absolute top-0 w-full p-4 flex justify-between items-start z-40 bg-gradient-to-b from-black/80 to-transparent">
         <div>
-          <div className="text-sm text-slate-400">Name: <span className="text-white font-bold">{myPlayer?.name}</span></div>
-          <div className="text-sm text-slate-400">Role: <span className={`font-bold ${myPlayer?.role === 'MAFIA' ? 'text-red-500' : 'text-cyan-400'}`}>{myPlayer?.role}</span></div>
+          <div>الاسم: <span className="font-bold text-cyan-300">{myPlayer?.name}</span></div>
+          <div>الدور: <span className={`font-bold ${myPlayer?.role === 'MAFIA' ? 'text-red-500' : 'text-green-400'}`}>{myPlayer?.role}</span></div>
+        </div>
+
+        {/* Game Phase Badge */}
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-slate-800/80 backdrop-blur rounded-full border border-slate-600 font-bold">
+          {phase.replace(/_/g, ' ')}
         </div>
 
         {/* In-Game Admin Menu */}
         {myPlayer?.isHost && (
           <div className="relative">
-            <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-black/50 p-2 rounded text-white text-2xl backdrop-blur">≡</button>
+            <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-black/40 p-2 rounded text-2xl">≡</button>
             {showAdminMenu && (
-              <div className="absolute left-0 mt-2 w-64 bg-slate-900/95 border border-slate-600 rounded-xl p-2 right-0">
-                <div className="text-xs text-red-500 font-bold p-2">KICK MENU</div>
+              <div className="absolute left-0 mt-2 w-56 bg-slate-900 border border-slate-600 rounded-lg p-2">
                 {players.filter(p => !p.isHost).map(p => (
-                  <div key={p.id} className="flex justify-between p-2 hover:bg-slate-800 text-sm">
-                    <span>{p.name} {p.isAlive ? '' : '💀'}</span>
-                    <button onClick={() => handleAdminKick(p.id)} className="text-red-400 border border-red-900 px-1 rounded">❌</button>
+                  <div key={p.id} className="flex justify-between items-center p-2 hover:bg-slate-800">
+                    <span className="text-sm">{p.name}</span>
+                    <button onClick={() => handleAdminKick(p.id)} className="text-red-400 text-xs border border-red-500/30 px-2 py-1 rounded">طرد</button>
                   </div>
                 ))}
               </div>
@@ -325,60 +316,49 @@ export default function App() {
         )}
       </div>
 
-      {/* Phase Indicator */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30">
-        <div className="px-6 py-2 rounded-full bg-slate-800/80 backdrop-blur border border-slate-600 font-mono text-sm tracking-widest uppercase">
-          {phase.replace('_', ' ')}
-        </div>
-      </div>
-
-      {/* Notifications */}
+      {/* Messages Toast */}
       <AnimatePresence>
         {msg && (
-          <motion.div initial={{ y: -100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -100, opacity: 0 }} className="fixed top-24 left-0 w-full z-50 flex justify-center pointer-events-none">
-            <div className="bg-slate-800 border border-slate-600 text-white px-8 py-4 rounded-2xl shadow-2xl text-xl max-w-lg text-center backdrop-blur-xl">
+          <motion.div initial={{ y: -50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -50, opacity: 0 }} className="fixed top-24 left-0 w-full flex justify-center z-50 pointer-events-none">
+            <div className="bg-gradient-to-r from-orange-600 to-red-600 text-white px-8 py-3 rounded-2xl shadow-2xl font-bold text-xl border-2 border-orange-400">
               {msg}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Investigation Result Pop-up */}
+      {/* Investigation Result */}
       {investigationResult && (
-        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
-          <div className="bg-purple-900/90 p-10 rounded-3xl border-2 border-purple-500 text-center shadow-[0_0_50px_rgba(168,85,247,0.5)]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-indigo-900 p-8 rounded-3xl border-2 border-indigo-400 text-center shadow-[0_0_50px_rgba(99,102,241,0.5)]">
             <div className="text-6xl mb-4">🕵️‍♂️</div>
-            <h2 className="text-3xl font-bold mb-2">Investigation Result</h2>
-            <div className="text-4xl font-mono bg-black/50 p-4 rounded-xl mt-4">{investigationResult}</div>
+            <h3 className="text-2xl font-bold mb-2 text-indigo-200">نتيجة التحقيق</h3>
+            <div className="text-3xl font-black bg-black/40 p-4 rounded-xl">{investigationResult}</div>
+            <button onClick={() => setInvestigationResult(null)} className="mt-6 text-sm text-indigo-300">إغلاق</button>
           </div>
-        </motion.div>
+        </div>
       )}
 
       {/* Night Overlay */}
       {isNight && !isMyTurn && myPlayer?.isAlive && (
-        <div className="fixed inset-0 bg-black/95 z-30 flex flex-col items-center justify-center p-8 text-center text-slate-600">
-          <motion.div animate={{ scale: [1, 1.1, 1], opacity: [0.3, 0.7, 0.3] }} transition={{ repeat: Infinity, duration: 3 }} className="text-9xl mb-8">🌑</motion.div>
-          <h2 className="text-4xl font-light tracking-widest">NIGHT FALLS</h2>
-          <p className="mt-4 text-xl">The city is sleeping...</p>
+        <div className="fixed inset-0 bg-black/95 z-30 flex flex-col items-center justify-center text-center p-8">
+          <motion.div animate={{ scale: [1, 1.05, 1], opacity: [0.5, 1, 0.5] }} transition={{ repeat: Infinity, duration: 4 }} className="text-9xl mb-6">🌑</motion.div>
+          <h2 className="text-3xl text-slate-500 font-light tracking-[0.2em]">المدينة نائمة</h2>
         </div>
       )}
 
-      {/* Host Controls (Day Only) */}
+      {/* Host Controls */}
       {isHostDayTurn && (
-        <div className="fixed top-28 w-full z-40 flex justify-center">
-          <div className="bg-slate-800/90 border border-red-500/50 p-4 rounded-2xl flex gap-4 backdrop-blur shadow-2xl">
-            <div className="text-red-400 font-bold flex items-center px-4 border-r border-slate-600">
-              HOST CONTROLS
-            </div>
-            <button onClick={() => handleHostDayAction('SKIP')} className="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-xl font-bold transition-all">SKIP DAY ⏭️</button>
-            <div className="text-slate-400 text-xs flex items-center max-w-xs">
-              Select a player below to EXECUTE (Kick)
-            </div>
+        <div className="fixed top-32 w-full flex justify-center z-40">
+          <div className="bg-slate-800/90 backdrop-blur p-4 rounded-2xl border border-red-500/50 flex items-center gap-4 shadow-2xl">
+            <div className="text-red-400 font-bold px-2 border-l border-slate-600 pl-4">تحكم الهوست</div>
+            <div className="text-xs text-slate-400">اختر لاعب للإعدام</div>
+            <button onClick={() => handleHostDayAction('SKIP')} className="bg-green-600 hover:bg-green-500 px-4 py-2 rounded-lg font-bold">تخطي اليوم ⏭️</button>
           </div>
         </div>
       )}
 
-      {/* Main Game Grid */}
+      {/* Grid */}
       <div className="pt-32 p-4 grid grid-cols-2 md:grid-cols-4 gap-4 pb-32 max-w-5xl mx-auto">
         {players.map(p => (
           <motion.div
@@ -389,19 +369,16 @@ export default function App() {
               if (isHostDayTurn && p.isAlive) handleHostDayAction('KICK', p.id);
             }}
             className={`
-                        relative bg-slate-800 rounded-2xl p-6 flex flex-col items-center transition-all cursor-pointer border-2
-                        ${p.isAlive ? 'border-slate-700' : 'border-red-900 bg-slate-900 grayscale opacity-60'}
-                        ${(isMyTurn || isHostDayTurn) && p.isAlive && p.id !== myPlayer.id ? 'hover:border-yellow-400 hover:scale-105 hover:shadow-[0_0_20px_rgba(250,204,21,0.3)]' : ''}
-                        ${myPlayer.id === p.id ? 'ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-900' : ''}
+                        relative bg-slate-800 p-6 rounded-2xl flex flex-col items-center border-2 cursor-pointer transition-all
+                        ${!p.isAlive ? 'border-red-900 bg-red-950/30 grayscale opacity-60' : 'border-slate-700'}
+                        ${(isMyTurn || isHostDayTurn) && p.isAlive && p.id !== myPlayer?.id ? 'hover:border-yellow-400 hover:scale-105 hover:shadow-[0_0_15px_rgba(250,204,21,0.4)]' : ''}
+                        ${myPlayer?.id === p.id ? 'ring-2 ring-cyan-500 ring-offset-2 ring-offset-slate-900' : ''}
                     `}
           >
             <div className="text-6xl mb-3">{p.isAlive ? p.avatar : '💀'}</div>
-            <div className="font-bold text-center truncate w-full">{p.name}</div>
-            {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center text-red-600 font-black text-3xl opacity-80 rotate-[-20deg] border-4 border-red-600 rounded-xl">ELIMINATED</div>}
-
-            {isHostDayTurn && p.isAlive && (
-              <div className="absolute top-2 right-2 text-red-500 animate-pulse text-xl">☠️</div>
-            )}
+            <div className="font-bold text-center w-full truncate">{p.name}</div>
+            {isHostDayTurn && p.isAlive && <div className="absolute top-2 right-2 text-red-500 animate-pulse text-xl">☠️</div>}
+            {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center text-red-600 font-black text-3xl opacity-80 border-4 border-red-600 rounded-xl -rotate-12">ميت</div>}
           </motion.div>
         ))}
       </div>
@@ -410,12 +387,12 @@ export default function App() {
       <div className="fixed bottom-0 w-full bg-gradient-to-t from-slate-900 to-transparent pt-20 pb-8 text-center z-40 pointer-events-none">
         {myPlayer?.isAlive ? (
           <div className="text-2xl font-bold animate-pulse">
-            {isMyTurn ? <span className="text-green-400">⚡ YOUR TURN ⚡</span> :
-              isHostDayTurn ? <span className="text-red-400">🚨 HOST DECISION 🚨</span> :
-                <span className="text-slate-500">Wait...</span>}
+            {isMyTurn ? <span className="text-green-400">⚡ دورك الآن! ⚡</span> :
+              isHostDayTurn ? <span className="text-red-400">🚨 قرارك يا هوست 🚨</span> :
+                <span className="text-slate-500">انتظر دورك...</span>}
           </div>
         ) : (
-          <div className="text-red-500 font-bold text-xl">👻 YOU ARE DEAD</div>
+          <div className="text-red-500 font-bold text-xl">👻 أنت ميت</div>
         )}
       </div>
 

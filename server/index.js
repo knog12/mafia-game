@@ -11,12 +11,16 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    credentials: true,
+    allowedHeaders: ["my-custom-header"],
+    transports: ['websocket', 'polling']
+  },
+  allowEIO3: true
 });
 
 // === STATE ===
-const rooms = {}; // { roomId: { id, hostId, players: [], phase, ... } }
+const rooms = {};
 
 const PHASES = {
   LOBBY: 'LOBBY',
@@ -29,16 +33,8 @@ const PHASES = {
   GAME_OVER: 'GAME_OVER'
 };
 
+// Unicode Avatars to ensure they render everywhere
 const AVATARS = ['👨', '👩', '🕵️', '🤠', '🧙', '🧛', '🤖', '👽', '🤡', '👹', '👮', '👑'];
-
-// === HELPERS ===
-function shuffleArray(array) {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
-}
 
 // === SOCKET ===
 io.on('connection', (socket) => {
@@ -48,7 +44,10 @@ io.on('connection', (socket) => {
   socket.on('create_room', ({ playerName, playerId }) => {
     if (!playerId) return socket.emit('error', 'No Player ID');
 
+    // Create unique Room ID
     const roomId = uuidv4().substring(0, 4).toUpperCase();
+
+    // Check if this player is already hosting (Clean up old rooms if necessary, but for now just make new one)
 
     // Create Host object
     const hostPlayer = {
@@ -74,50 +73,68 @@ io.on('connection', (socket) => {
     };
 
     socket.join(roomId);
-    socket.emit('room_created', roomId);
-    socket.emit('joined_room', roomId);
-    io.to(roomId).emit('update_players', rooms[roomId].players);
+
+    // Emit special event for the creator
+    socket.emit('room_joined', {
+      roomId,
+      players: rooms[roomId].players,
+      phase: PHASES.LOBBY
+    });
+
     console.log(`Room ${roomId} created by ${playerName}`);
   });
 
   // 2. JOIN ROOM (Robust Persistence)
   socket.on('join_room', ({ roomId, playerName, playerId }) => {
+    handleJoinLogic(socket, roomId, playerName, playerId);
+  });
+
+  // 3. RECONNECT (Same logic as join, but explicit intent)
+  socket.on('reconnect_user', ({ roomId, playerName, playerId }) => {
+    handleJoinLogic(socket, roomId, playerName, playerId);
+  });
+
+  function handleJoinLogic(socket, roomId, playerName, playerId) {
     const room = rooms[roomId];
     if (!room) return socket.emit('error', 'الغرفة غير موجودة');
     if (!playerId) return socket.emit('error', 'No Player ID');
 
     // Check if player exists (Reconnection)
-    const existingPlayer = room.players.find(p => p.id === playerId);
+    const existingPlayerIndex = room.players.findIndex(p => p.id === playerId);
 
-    if (existingPlayer) {
-      // Reconnect logic
-      existingPlayer.socketId = socket.id;
-      if (playerName) existingPlayer.name = playerName; // Update name if provided
+    if (existingPlayerIndex !== -1) {
+      // === RECONNECT CASE ===
+      const player = room.players[existingPlayerIndex];
+      player.socketId = socket.id; // Update Socket
+      if (playerName) player.name = playerName; // Update Name
 
       socket.join(roomId);
-      socket.emit('joined_room', roomId);
-      socket.emit('player_reconnected', {
-        player: existingPlayer,
+
+      // Send success to the USER
+      socket.emit('room_joined', {
+        roomId,
         players: room.players,
         phase: room.phase
       });
+
+      // Update EVERYONE
       io.to(roomId).emit('update_players', room.players);
-      console.log(`Player ${existingPlayer.name} reconnected to ${roomId}`);
+      console.log(`Player ${player.name} reconnected (Updated Socket)`);
+
     } else {
-      // New Player logic
+      // === NEW PLAYER CASE ===
       if (room.phase !== PHASES.LOBBY) {
         return socket.emit('error', 'اللعبة بدأت بالفعل');
       }
 
-      // Prevent Duplicate Sockets (rare edge case)
-      const isSocketResused = room.players.some(p => p.socketId === socket.id);
-      if (isSocketResused) return;
+      // Prevent Duplicate Sockets or Names if needed (Optional)
+      // We rely on ID. If ID is different, it's a new player.
 
       const newPlayer = {
         id: playerId,
         socketId: socket.id,
         name: playerName,
-        isHost: false,
+        isHost: false, // New players are never host unless logic changes
         role: 'PENDING',
         isAlive: true,
         avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
@@ -126,31 +143,39 @@ io.on('connection', (socket) => {
 
       room.players.push(newPlayer);
       socket.join(roomId);
-      socket.emit('joined_room', roomId);
+
+      // Send success to the USER
+      socket.emit('room_joined', {
+        roomId,
+        players: room.players,
+        phase: room.phase
+      });
+
+      // Update EVERYONE
       io.to(roomId).emit('update_players', room.players);
       console.log(`Player ${playerName} joined ${roomId}`);
     }
-  });
+  }
 
-  // 3. START GAME
+  // 4. START GAME
   socket.on('start_game', ({ roomId }) => {
     const room = rooms[roomId];
     if (!room) return;
 
     // Validate Host
-    // We trust the sender if they have a player in the room that is marked as host, 
-    // AND their current socket matches.
     const sender = room.players.find(p => p.socketId === socket.id);
     if (!sender || !sender.isHost) return;
 
     if (room.players.length < 3) {
-      // return socket.emit('error', 'Need 3+ players'); 
-      // (Optional: enforce min players)
+      // return socket.emit('game_message', 'Need at least 3 players!');
     }
 
-    // Assign Roles
+    // Role Distro
     const playersCount = room.players.length;
     let mafiaCount = playersCount < 8 ? 1 : 2;
+
+    // Helper: Shuffle
+    function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; }
 
     let roles = [];
     for (let i = 0; i < mafiaCount; i++) roles.push('MAFIA');
@@ -158,7 +183,7 @@ io.on('connection', (socket) => {
     roles.push('DETECTIVE');
     while (roles.length < playersCount) roles.push('CITIZEN');
 
-    roles = shuffleArray(roles);
+    roles = shuffle(roles);
 
     room.players.forEach((p, i) => {
       p.role = roles[i];
@@ -170,15 +195,12 @@ io.on('connection', (socket) => {
     startNightCycle(roomId);
   });
 
-  // === NIGHT CYCLE MANAGMENT ===
+  // NIGHT LOGIC
   function startNightCycle(roomId) {
     const room = rooms[roomId];
     if (!room) return;
 
-    // Reset Night Actions
-    room.mafiaTarget = null;
-    room.nurseTarget = null;
-    room.detectiveCheck = null;
+    room.mafiaTarget = null; room.nurseTarget = null; room.detectiveCheck = null;
 
     updatePhase(roomId, PHASES.NIGHT_SLEEP);
     io.to(roomId).emit('play_audio', 'everyone_sleep');
@@ -186,118 +208,99 @@ io.on('connection', (socket) => {
     setTimeout(() => {
       updatePhase(roomId, PHASES.NIGHT_MAFIA);
       io.to(roomId).emit('play_audio', 'mafia_wake');
-    }, 4500); // 4.5s delay for sleep audio
+    }, 4500);
   }
 
-  // === PLAYER ACTION ===
+  // PLAYER ACTION
   socket.on('player_action', ({ roomId, action, targetId }) => {
     const room = rooms[roomId];
     if (!room) return;
     const player = room.players.find(p => p.socketId === socket.id);
     if (!player || !player.isAlive) return;
 
-    // Mafia Action
     if (room.phase === PHASES.NIGHT_MAFIA && player.role === 'MAFIA') {
       room.mafiaTarget = targetId;
-      // Move to Nurse after short delay to allow mafia to sync
-      // We can use a timeout on the server to transition automatically, 
-      // or wait for the first mafia vote. Simple version: first vote triggers transition.
       setTimeout(() => {
         updatePhase(roomId, PHASES.NIGHT_NURSE);
         io.to(roomId).emit('play_audio', 'nurse_wake');
       }, 2000);
     }
-
-    // Nurse Action
-    if (room.phase === PHASES.NIGHT_NURSE && player.role === 'DOCTOR') {
+    else if (room.phase === PHASES.NIGHT_NURSE && player.role === 'DOCTOR') {
       if (targetId === player.id) {
-        if (player.hasSelfHealed) return socket.emit('error', 'Self-heal used already');
+        if (player.hasSelfHealed) return socket.emit('error', 'Healed self once already');
         player.hasSelfHealed = true;
       }
       room.nurseTarget = targetId;
-
       setTimeout(() => {
         updatePhase(roomId, PHASES.NIGHT_DETECTIVE);
         io.to(roomId).emit('play_audio', 'detective_wake');
       }, 2000);
     }
-
-    // Detective Action
-    if (room.phase === PHASES.NIGHT_DETECTIVE && player.role === 'DETECTIVE') {
+    else if (room.phase === PHASES.NIGHT_DETECTIVE && player.role === 'DETECTIVE') {
       const target = room.players.find(p => p.id === targetId);
       const isMafia = target && target.role === 'MAFIA';
       socket.emit('investigation_result', isMafia ? 'MAFIA 😈' : 'CITIZEN 😇');
 
       setTimeout(() => {
         calculateResults(roomId);
-      }, 3000); // Time to read result
+      }, 3000);
     }
   });
 
-  // === CALCULATION & DAY ===
+  // CALC RESULTS
   function calculateResults(roomId) {
     const room = rooms[roomId];
     if (!room) return;
-
     updatePhase(roomId, PHASES.DAY_WAKE);
 
-    // 1. Play Wake Audio
     io.to(roomId).emit('play_audio', 'everyone_wake');
 
-    // 2. Strict Delay (4.5s) BEFORE sending results
     setTimeout(() => {
-      let msg = "صباح الخير يا مدينة!";
-      let audioToPlay = "";
-      let victim = null;
+      let msg = "صباح الخير!";
+      let audio = "result_fail";
 
       if (room.mafiaTarget && room.mafiaTarget !== room.nurseTarget) {
-        victim = room.players.find(p => p.id === room.mafiaTarget);
+        const victim = room.players.find(p => p.id === room.mafiaTarget);
         if (victim) {
           victim.isAlive = false;
-          msg = `للأسف... المافيا قتلت ${victim.name} 🩸`;
-          audioToPlay = 'result_success'; // Sad/Dramatic
+          msg = `المافيا قامت بقتل ${victim.name} 🩸`;
+          audio = "result_success";
         }
       } else {
-        msg = "الحمدلله! لم يمت أحد الليلة ✨";
-        audioToPlay = 'result_fail'; // Happy/Safe
+        msg = "لم يمت أحد الليلة ✨";
       }
 
       io.to(roomId).emit('day_result', { msg, players: room.players });
-      io.to(roomId).emit('play_audio', audioToPlay);
+      io.to(roomId).emit('play_audio', audio);
 
       checkWinCondition(roomId);
 
-      // Transition to Discussion (Host Control Mode)
       if (room.phase !== PHASES.GAME_OVER) {
         setTimeout(() => {
           updatePhase(roomId, PHASES.DAY_DISCUSSION);
-        }, 5000); // Time to see result popup
+        }, 5000);
       }
-
-    }, 4500); // <-- THE CRITICAL DELAY
+    }, 4500);
   }
 
-  // === HOST ONLY DAY ACTIONS (No Public Vote) ===
+  // HOST DAY ACTIONS
   socket.on('host_action_day', ({ roomId, action, targetId }) => {
     const room = rooms[roomId];
     if (!room) return;
     const sender = room.players.find(p => p.socketId === socket.id);
-    if (!sender || !sender.isHost) return; // Security Check
-
-    if (room.phase !== PHASES.DAY_DISCUSSION) return;
+    if (!sender || !sender.isHost) return;
 
     if (action === 'SKIP') {
-      io.to(roomId).emit('game_message', 'الهوست قرر تخطي اليوم ⏭️');
-      startNightCycle(roomId);
+      io.to(roomId).emit('game_message', 'تم تخطي اليوم ⏭️');
+      setTimeout(() => startNightCycle(roomId), 2000);
     } else if (action === 'KICK' && targetId) {
       const victim = room.players.find(p => p.id === targetId);
       if (victim) {
         victim.isAlive = false;
-        io.to(roomId).emit('game_message', `حكم الهوست بالإعدام على: ${victim.name} ⚖️`);
+        io.to(roomId).emit('game_message', `تم إعدام ${victim.name} ⚖️`);
         io.to(roomId).emit('update_players', room.players);
         checkWinCondition(roomId);
 
-        // Wait briefly then night
         if (room.phase !== PHASES.GAME_OVER) {
           setTimeout(() => startNightCycle(roomId), 4000);
         }
@@ -305,7 +308,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // === ADMIN KICK (Any Phase) ===
   socket.on('admin_kick_player', ({ roomId, targetId }) => {
     const room = rooms[roomId];
     if (!room) return;
@@ -315,14 +317,13 @@ io.on('connection', (socket) => {
     const idx = room.players.findIndex(p => p.id === targetId);
     if (idx !== -1) {
       const p = room.players[idx];
-      io.to(p.socketId).emit('force_disconnect'); // Kick client side
-      room.players.splice(idx, 1); // Remove from array
+      io.to(p.socketId).emit('force_disconnect');
+      room.players.splice(idx, 1);
       io.to(roomId).emit('update_players', room.players);
-      io.to(roomId).emit('game_message', `تم طرد ${p.name} من الغرفة 🚫`);
+      io.to(roomId).emit('game_message', `تم طرد ${p.name}`);
     }
   });
 
-  // === UTILS ===
   function updatePhase(roomId, phase) {
     if (rooms[roomId]) {
       rooms[roomId].phase = phase;
@@ -331,23 +332,20 @@ io.on('connection', (socket) => {
   }
 
   function checkWinCondition(roomId) {
-    const room = rooms[roomId];
-    if (!room) return;
+    const room = rooms[roomId]; if (!room) return;
+    const mafia = room.players.filter(p => p.isAlive && p.role === 'MAFIA').length;
+    const citizen = room.players.filter(p => p.isAlive && p.role !== 'MAFIA').length;
 
-    const mafiaCount = room.players.filter(p => p.isAlive && p.role === 'MAFIA').length;
-    const citizenCount = room.players.filter(p => p.isAlive && p.role !== 'MAFIA').length;
-
-    if (mafiaCount === 0) {
+    if (mafia === 0) {
       updatePhase(roomId, PHASES.GAME_OVER);
       io.to(roomId).emit('game_over', 'CITIZENS');
-    } else if (mafiaCount >= citizenCount) {
+    } else if (mafia >= citizen) {
       updatePhase(roomId, PHASES.GAME_OVER);
       io.to(roomId).emit('game_over', 'MAFIA');
     }
   }
 
   socket.on('disconnect', () => {
-    // We do NOT remove players on disconnect to allow persistence
     console.log('socket disconnected', socket.id);
   });
 });
