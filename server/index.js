@@ -99,14 +99,26 @@ io.on('connection', (socket) => {
     if (!room) return socket.emit('error', 'الغرفة غير موجودة');
     if (!playerId) return socket.emit('error', 'No Player ID');
 
-    // Check if player exists (Reconnection)
-    const existingPlayerIndex = room.players.findIndex(p => p.id === playerId);
+    // 1. Try Match by ID
+    let existingPlayerIndex = room.players.findIndex(p => p.id === playerId);
+
+    // 2. Fallback: Try Match by Name (if ID not found but Name exists)
+    // This fixes the issue where a Host refreshes, gets a new ID, and loses Host powers.
+    if (existingPlayerIndex === -1 && playerName) {
+      existingPlayerIndex = room.players.findIndex(p => p.name === playerName);
+      if (existingPlayerIndex !== -1) {
+        console.log(`Recovered session for ${playerName} by Name Match.`);
+      }
+    }
 
     if (existingPlayerIndex !== -1) {
       // === RECONNECT CASE ===
       const player = room.players[existingPlayerIndex];
       player.socketId = socket.id; // Update Socket
-      if (playerName) player.name = playerName; // Update Name
+      // Update ID to the new one if we matched by name, so future matches work by ID
+      if (player.id !== playerId) {
+        player.id = playerId;
+      }
 
       socket.join(roomId);
 
@@ -126,9 +138,6 @@ io.on('connection', (socket) => {
       if (room.phase !== PHASES.LOBBY) {
         return socket.emit('error', 'اللعبة بدأت بالفعل');
       }
-
-      // Prevent Duplicate Sockets or Names if needed (Optional)
-      // We rely on ID. If ID is different, it's a new player.
 
       const newPlayer = {
         id: playerId,
@@ -166,23 +175,29 @@ io.on('connection', (socket) => {
     const sender = room.players.find(p => p.socketId === socket.id);
     if (!sender || !sender.isHost) return;
 
-    if (room.players.length < 3) {
-      // return socket.emit('game_message', 'Need at least 3 players!');
-    }
-
     // Role Distro
     const playersCount = room.players.length;
-    let mafiaCount = playersCount < 8 ? 1 : 2;
-
-    // Helper: Shuffle
-    function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; }
-
     let roles = [];
-    for (let i = 0; i < mafiaCount; i++) roles.push('MAFIA');
-    roles.push('DOCTOR');
-    roles.push('DETECTIVE');
-    while (roles.length < playersCount) roles.push('CITIZEN');
 
+    // STRICT PRIORITY: Mafia -> Doc -> Detective -> Citizen
+    let mafiaCount = playersCount >= 8 ? 2 : 1;
+    let doctorCount = 1;
+    let detectiveCount = 1;
+
+    for (let i = 0; i < mafiaCount; i++) roles.push('MAFIA');
+    for (let i = 0; i < doctorCount; i++) roles.push('DOCTOR');
+    for (let i = 0; i < detectiveCount; i++) roles.push('DETECTIVE');
+
+    // Fill remainder with Citizen
+    while (roles.length < playersCount) {
+      roles.push('CITIZEN');
+    }
+
+    // Trim if we have too many roles (e.g. 2 players but need 3 special roles)
+    if (roles.length > playersCount) roles = roles.slice(0, playersCount);
+
+    // Shuffle
+    function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; }
     roles = shuffle(roles);
 
     room.players.forEach((p, i) => {
