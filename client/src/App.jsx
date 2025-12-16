@@ -5,11 +5,21 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 
 // === CONFIG ===
+// === CONFIG ===
 const SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
 const socket = io(SERVER_URL, {
   transports: ['websocket', 'polling'],
   withCredentials: true
 });
+
+// === CONSTANTS ===
+const ROLES_AR = {
+  MAFIA: 'مافيا 👿',
+  DOCTOR: 'طبيب 🩺',
+  DETECTIVE: 'محقق (شايب) 🕵️‍♂️',
+  CITIZEN: 'مواطن 👤',
+  PENDING: 'جاري التوزيع...'
+};
 
 // === SOUNDS ===
 const sounds = {
@@ -64,13 +74,12 @@ export default function App() {
       localStorage.setItem('mafia_savedRoom', roomId);
     });
 
-    // Legacy Support for older server ver
+    // Legacy Support 
     socket.on('joined_room', (id) => {
       setRoomId(id);
       setView('LOBBY');
       localStorage.setItem('mafia_savedRoom', id);
     });
-
     socket.on('room_created', (id) => {
       setRoomId(id);
       setView('LOBBY');
@@ -99,7 +108,8 @@ export default function App() {
     socket.on('game_over', w => { setPhase('GAME_OVER'); setMsg(`الفائز: ${w}`); });
 
     socket.on('error', err => {
-      alert(err);
+      // alert(err); // Optional: suppress alerts if noisy
+      console.error(err);
       if (err.includes('not found')) {
         setView('LOGIN');
         localStorage.removeItem('mafia_savedRoom');
@@ -124,14 +134,18 @@ export default function App() {
 
   const joinRoom = () => {
     if (!name || !roomId) return alert('أدخل البيانات');
+    const code = roomId.toUpperCase(); // Force Uppercase
     localStorage.setItem('mafia_playerName', name);
-    socket.emit('join_room', { roomId, playerName: name, playerId });
+    socket.emit('join_room', { roomId: code, playerName: name, playerId });
   };
 
   const startGame = () => socket.emit('start_game', { roomId });
 
   const handleAction = (targetId) => {
-    if (myPlayer?.isAlive) socket.emit('player_action', { roomId, action: 'USE', targetId });
+    if (myPlayer?.isAlive) {
+      console.log(`Sending Action: USE on ${targetId}`);
+      socket.emit('player_action', { roomId, action: 'USE', targetId });
+    }
   };
 
   const hostAction = (action, targetId = null) => {
@@ -182,7 +196,7 @@ export default function App() {
               className="flex-1 bg-slate-900/80 text-white text-center p-4 rounded-xl text-lg font-mono uppercase border border-slate-700 focus:border-purple-500 focus:outline-none"
               placeholder="CODE"
               value={roomId}
-              onChange={e => setRoomId(e.target.value)}
+              onChange={e => setRoomId(e.target.value.toUpperCase())}
             />
             <button
               onClick={joinRoom}
@@ -243,7 +257,9 @@ export default function App() {
               ابدأ اللعبة 🚀
             </button>
           ) : (
-            <div className="text-slate-500 animate-pulse text-xl">بانتظار الهوست...</div>
+            <div className="text-slate-500 animate-pulse text-xl border border-slate-700 p-4 rounded-xl bg-slate-800/50">
+              بانتظار الهوست لبدء اللعبة... ⏳
+            </div>
           )}
         </div>
       )}
@@ -257,7 +273,7 @@ export default function App() {
               <div className="text-slate-400 text-sm">الملف الشخصي</div>
               <div className="text-2xl font-bold">{myPlayer?.name}</div>
               <div className={`mt-1 font-bold px-3 py-1 rounded inline-block ${myPlayer?.role === 'MAFIA' ? 'bg-red-900/50 text-red-400' : 'bg-green-900/50 text-green-400'}`}>
-                {myPlayer?.role}
+                {ROLES_AR[myPlayer?.role]}
               </div>
             </div>
             <div className="absolute left-1/2 -translate-x-1/2 top-8 px-6 py-2 bg-slate-800/80 backdrop-blur rounded-full border border-slate-600 font-bold shadow-lg">

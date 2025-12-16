@@ -70,8 +70,8 @@ io.on('connection', (socket) => {
   });
 
   // 2. JOIN / RECONNECT
-  socket.on('join_room', ({ roomId, playerName, playerId }) => handleJoin(socket, roomId, playerName, playerId));
-  socket.on('reconnect_user', ({ roomId, playerName, playerId }) => handleJoin(socket, roomId, playerName, playerId));
+  socket.on('join_room', ({ roomId, playerName, playerId }) => handleJoin(socket, roomId?.toUpperCase(), playerName, playerId));
+  socket.on('reconnect_user', ({ roomId, playerName, playerId }) => handleJoin(socket, roomId?.toUpperCase(), playerName, playerId));
 
   function handleJoin(socket, roomId, playerName, playerId) {
     const room = rooms[roomId];
