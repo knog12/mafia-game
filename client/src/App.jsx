@@ -71,6 +71,12 @@ export default function App() {
       localStorage.setItem('mafia_savedRoom', id);
     });
 
+    socket.on('room_created', (id) => {
+      setRoomId(id);
+      setView('LOBBY');
+      localStorage.setItem('mafia_savedRoom', id);
+    });
+
     socket.on('update_players', (list) => setPlayers(list));
     socket.on('game_started', (list) => { setPlayers(list); setView('GAME'); });
     socket.on('phase_change', (p) => { setPhase(p); setInvestigationResult(null); });
