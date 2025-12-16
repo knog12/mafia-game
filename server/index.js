@@ -7,22 +7,17 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 app.use(cors());
 
-const VERCEL_URL = 'https://mafia-game.vercel.app';
-
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"],
-    credentials: true
-  },
-  transports: ['websocket', 'polling']
+    methods: ["GET", "POST"]
+  }
 });
 
-// === متغيرات اللعبة ===
-const rooms = {};
+// === STATE ===
+const rooms = {}; // { roomId: { id, hostId, players: [], phase, ... } }
 
-// === مراحل اللعبة ===
 const PHASES = {
   LOBBY: 'LOBBY',
   NIGHT_SLEEP: 'NIGHT_SLEEP',
@@ -34,9 +29,9 @@ const PHASES = {
   GAME_OVER: 'GAME_OVER'
 };
 
-const AVATARS = ['👨', '👩', '🕵️', '🤠', '🧙', '🧛', '🤖', '👽', '🤡', '👹'];
+const AVATARS = ['👨', '👩', '🕵️', '🤠', '🧙', '🧛', '🤖', '👽', '🤡', '👹', '👮', '👑'];
 
-// === دوال مساعدة ===
+// === HELPERS ===
 function shuffleArray(array) {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -45,153 +40,142 @@ function shuffleArray(array) {
   return array;
 }
 
-// === بداية الاتصال ===
+// === SOCKET ===
 io.on('connection', (socket) => {
   console.log('User Connected:', socket.id);
 
-  // 1. إنشاء غرفة
+  // 1. CREATE ROOM
   socket.on('create_room', ({ playerName, playerId }) => {
-    // التحقق من البيانات
-    if (!playerId) {
-      socket.emit('error', 'Missing Player ID');
-      return;
-    }
+    if (!playerId) return socket.emit('error', 'No Player ID');
 
     const roomId = uuidv4().substring(0, 4).toUpperCase();
+
+    // Create Host object
+    const hostPlayer = {
+      id: playerId,
+      socketId: socket.id,
+      name: playerName,
+      isHost: true,
+      role: 'PENDING',
+      isAlive: true,
+      avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
+      hasSelfHealed: false
+    };
+
     rooms[roomId] = {
       id: roomId,
       hostId: playerId,
-      players: [],
+      players: [hostPlayer],
       phase: PHASES.LOBBY,
       mafiaTarget: null,
       nurseTarget: null,
       detectiveCheck: null,
       winner: null
     };
+
     socket.join(roomId);
-
-    // إضافة اللاعب (الهوست)
-    const newHost = {
-      id: playerId,
-      socketId: socket.id,
-      name: playerName,
-      role: 'PENDING',
-      isAlive: true,
-      avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
-      isHost: true,
-      hasSelfHealed: false
-    };
-
-    rooms[roomId].players.push(newHost);
     socket.emit('room_created', roomId);
-    // تأكيد الانضمام أيضاً للهوست
     socket.emit('joined_room', roomId);
     io.to(roomId).emit('update_players', rooms[roomId].players);
-    console.log(`Room ${roomId} created by ${playerName} (${playerId})`);
+    console.log(`Room ${roomId} created by ${playerName}`);
   });
 
-  // 2. دخول غرفة / إعادة الاتصال (Persistence)
+  // 2. JOIN ROOM (Robust Persistence)
   socket.on('join_room', ({ roomId, playerName, playerId }) => {
     const room = rooms[roomId];
-    if (!room) {
-      socket.emit('error', 'الغرفة غير موجودة');
-      return;
-    }
+    if (!room) return socket.emit('error', 'الغرفة غير موجودة');
+    if (!playerId) return socket.emit('error', 'No Player ID');
 
-    if (!playerId) {
-      socket.emit('error', 'Missing Player ID');
-      return;
-    }
+    // Check if player exists (Reconnection)
+    const existingPlayer = room.players.find(p => p.id === playerId);
 
-    // التحقق هل اللاعب موجود مسبقاً (إعادة اتصال)
-    const existingPlayerIndex = room.players.findIndex(p => p.id === playerId);
+    if (existingPlayer) {
+      // Reconnect logic
+      existingPlayer.socketId = socket.id;
+      if (playerName) existingPlayer.name = playerName; // Update name if provided
 
-    if (existingPlayerIndex !== -1) {
       socket.join(roomId);
-      // تحديث الـ socketId للاعب العائد
-      room.players[existingPlayerIndex].socketId = socket.id;
-      // تحديث الاسم إذا تغير (اختياري)
-      if (playerName) room.players[existingPlayerIndex].name = playerName;
-
-      console.log(`Player ${playerName} (${playerId}) reconnected to ${roomId}.`);
-
-      // إرسال حالة اللعبة الحالية للاعب العائد
-      socket.emit('game_state_update', { phase: room.phase });
+      socket.emit('joined_room', roomId);
       socket.emit('player_reconnected', {
-        player: room.players[existingPlayerIndex],
-        players: room.players
+        player: existingPlayer,
+        players: room.players,
+        phase: room.phase
       });
-      socket.emit('joined_room', roomId); // <-- FIX: Redirect client
-
-      // تحديث القائمة للجميع
       io.to(roomId).emit('update_players', room.players);
+      console.log(`Player ${existingPlayer.name} reconnected to ${roomId}`);
     } else {
-      // لاعب جديد
+      // New Player logic
       if (room.phase !== PHASES.LOBBY) {
-        socket.emit('error', 'اللعبة بدأت بالفعل، لا يمكن الانضمام كلاعب جديد.');
-        return;
+        return socket.emit('error', 'اللعبة بدأت بالفعل');
       }
 
-      socket.join(roomId);
+      // Prevent Duplicate Sockets (rare edge case)
+      const isSocketResused = room.players.some(p => p.socketId === socket.id);
+      if (isSocketResused) return;
 
       const newPlayer = {
         id: playerId,
         socketId: socket.id,
         name: playerName,
+        isHost: false,
         role: 'PENDING',
         isAlive: true,
         avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
-        isHost: false,
         hasSelfHealed: false
       };
 
       room.players.push(newPlayer);
-      socket.emit('joined_room', roomId); // <-- FIX: Redirect client
+      socket.join(roomId);
+      socket.emit('joined_room', roomId);
       io.to(roomId).emit('update_players', room.players);
-      console.log(`Player ${playerName} (${playerId}) joined ${roomId}.`);
+      console.log(`Player ${playerName} joined ${roomId}`);
     }
   });
 
-  // 3. بدء اللعبة
+  // 3. START GAME
   socket.on('start_game', ({ roomId }) => {
     const room = rooms[roomId];
     if (!room) return;
 
-    // التحقق من أن المرسل هو الهوست
+    // Validate Host
+    // We trust the sender if they have a player in the room that is marked as host, 
+    // AND their current socket matches.
     const sender = room.players.find(p => p.socketId === socket.id);
-    if (!sender || sender.id !== room.hostId) return;
+    if (!sender || !sender.isHost) return;
 
     if (room.players.length < 3) {
-      // socket.emit('error', 'العدد غير كافٍ');
+      // return socket.emit('error', 'Need 3+ players'); 
+      // (Optional: enforce min players)
     }
 
-    const playerCount = room.players.length;
-    let mafiaCount = playerCount < 9 ? 1 : 2;
+    // Assign Roles
+    const playersCount = room.players.length;
+    let mafiaCount = playersCount < 8 ? 1 : 2;
 
     let roles = [];
     for (let i = 0; i < mafiaCount; i++) roles.push('MAFIA');
     roles.push('DOCTOR');
     roles.push('DETECTIVE');
-
-    while (roles.length < playerCount) {
-      roles.push('CITIZEN');
-    }
+    while (roles.length < playersCount) roles.push('CITIZEN');
 
     roles = shuffleArray(roles);
 
-    room.players.forEach((player, index) => {
-      player.role = roles[index];
+    room.players.forEach((p, i) => {
+      p.role = roles[i];
+      p.isAlive = true;
+      p.hasSelfHealed = false;
     });
 
     io.to(roomId).emit('game_started', room.players);
     startNightCycle(roomId);
   });
 
-  // === إدارة جولات الليل ===
+  // === NIGHT CYCLE MANAGMENT ===
   function startNightCycle(roomId) {
     const room = rooms[roomId];
     if (!room) return;
 
+    // Reset Night Actions
     room.mafiaTarget = null;
     room.nurseTarget = null;
     room.detectiveCheck = null;
@@ -202,31 +186,32 @@ io.on('connection', (socket) => {
     setTimeout(() => {
       updatePhase(roomId, PHASES.NIGHT_MAFIA);
       io.to(roomId).emit('play_audio', 'mafia_wake');
-    }, 4000);
+    }, 4500); // 4.5s delay for sleep audio
   }
 
-  // استقبال الأكشن من اللاعبين
+  // === PLAYER ACTION ===
   socket.on('player_action', ({ roomId, action, targetId }) => {
     const room = rooms[roomId];
     if (!room) return;
     const player = room.players.find(p => p.socketId === socket.id);
     if (!player || !player.isAlive) return;
 
+    // Mafia Action
     if (room.phase === PHASES.NIGHT_MAFIA && player.role === 'MAFIA') {
       room.mafiaTarget = targetId;
-
+      // Move to Nurse after short delay to allow mafia to sync
+      // We can use a timeout on the server to transition automatically, 
+      // or wait for the first mafia vote. Simple version: first vote triggers transition.
       setTimeout(() => {
         updatePhase(roomId, PHASES.NIGHT_NURSE);
         io.to(roomId).emit('play_audio', 'nurse_wake');
       }, 2000);
     }
 
+    // Nurse Action
     if (room.phase === PHASES.NIGHT_NURSE && player.role === 'DOCTOR') {
       if (targetId === player.id) {
-        if (player.hasSelfHealed) {
-          socket.emit('error', 'لقد عالجت نفسك سابقاً!');
-          return;
-        }
+        if (player.hasSelfHealed) return socket.emit('error', 'Self-heal used already');
         player.hasSelfHealed = true;
       }
       room.nurseTarget = targetId;
@@ -237,38 +222,44 @@ io.on('connection', (socket) => {
       }, 2000);
     }
 
+    // Detective Action
     if (room.phase === PHASES.NIGHT_DETECTIVE && player.role === 'DETECTIVE') {
-      const targetPlayer = room.players.find(p => p.id === targetId);
-      const result = targetPlayer.role === 'MAFIA' ? 'مافيا (MAFIA)' : 'بريء (Citizen/Doc)';
-      socket.emit('investigation_result', result);
+      const target = room.players.find(p => p.id === targetId);
+      const isMafia = target && target.role === 'MAFIA';
+      socket.emit('investigation_result', isMafia ? 'MAFIA 😈' : 'CITIZEN 😇');
 
       setTimeout(() => {
         calculateResults(roomId);
-      }, 3000);
+      }, 3000); // Time to read result
     }
   });
 
-  // === حساب النتائج والصباح ===
+  // === CALCULATION & DAY ===
   function calculateResults(roomId) {
     const room = rooms[roomId];
+    if (!room) return;
+
     updatePhase(roomId, PHASES.DAY_WAKE);
+
+    // 1. Play Wake Audio
     io.to(roomId).emit('play_audio', 'everyone_wake');
 
-    // **تعديل الصوت المتداخل**: الانتظار قبل تشغيل صوت النتيجة
+    // 2. Strict Delay (4.5s) BEFORE sending results
     setTimeout(() => {
-      let msg = "";
+      let msg = "صباح الخير يا مدينة!";
       let audioToPlay = "";
+      let victim = null;
 
       if (room.mafiaTarget && room.mafiaTarget !== room.nurseTarget) {
-        const victimIndex = room.players.findIndex(p => p.id === room.mafiaTarget);
-        if (victimIndex !== -1) {
-          room.players[victimIndex].isAlive = false;
-          msg = `للأسف... تم اغتيال اللاعب ${room.players[victimIndex].name}`;
-          audioToPlay = 'result_success';
+        victim = room.players.find(p => p.id === room.mafiaTarget);
+        if (victim) {
+          victim.isAlive = false;
+          msg = `للأسف... المافيا قتلت ${victim.name} 🩸`;
+          audioToPlay = 'result_success'; // Sad/Dramatic
         }
       } else {
-        msg = "الليلة كانت آمنة! لم يمت أحد.";
-        audioToPlay = 'result_fail';
+        msg = "الحمدلله! لم يمت أحد الليلة ✨";
+        audioToPlay = 'result_fail'; // Happy/Safe
       }
 
       io.to(roomId).emit('day_result', { msg, players: room.players });
@@ -276,99 +267,92 @@ io.on('connection', (socket) => {
 
       checkWinCondition(roomId);
 
-      // الانتقال لمرحلة النقاش (وانتظار قرار الهوست بلا مؤقت)
+      // Transition to Discussion (Host Control Mode)
       if (room.phase !== PHASES.GAME_OVER) {
         setTimeout(() => {
           updatePhase(roomId, PHASES.DAY_DISCUSSION);
-        }, 4000);
+        }, 5000); // Time to see result popup
       }
-    }, 4500);
+
+    }, 4500); // <-- THE CRITICAL DELAY
   }
 
-  // **صلاحية الهوست الحصرية**: اتخاذ قرار في أي وقت بالنهار
+  // === HOST ONLY DAY ACTIONS (No Public Vote) ===
   socket.on('host_action_day', ({ roomId, action, targetId }) => {
     const room = rooms[roomId];
     if (!room) return;
-
-    // التحقق من الهوست
     const sender = room.players.find(p => p.socketId === socket.id);
-    if (!sender || sender.id !== room.hostId) return;
+    if (!sender || !sender.isHost) return; // Security Check
 
     if (room.phase !== PHASES.DAY_DISCUSSION) return;
 
-    if (action === 'KICK') {
-      const pIndex = room.players.findIndex(p => p.id === targetId);
-      if (pIndex !== -1) {
-        room.players[pIndex].isAlive = false;
-        io.to(roomId).emit('player_kicked', { name: room.players[pIndex].name });
-        io.to(roomId).emit('game_message', `قرر الهوست طرد اللاعب: ${room.players[pIndex].name}`);
+    if (action === 'SKIP') {
+      io.to(roomId).emit('game_message', 'الهوست قرر تخطي اليوم ⏭️');
+      startNightCycle(roomId);
+    } else if (action === 'KICK' && targetId) {
+      const victim = room.players.find(p => p.id === targetId);
+      if (victim) {
+        victim.isAlive = false;
+        io.to(roomId).emit('game_message', `حكم الهوست بالإعدام على: ${victim.name} ⚖️`);
+        io.to(roomId).emit('update_players', room.players);
+        checkWinCondition(roomId);
+
+        // Wait briefly then night
+        if (room.phase !== PHASES.GAME_OVER) {
+          setTimeout(() => startNightCycle(roomId), 4000);
+        }
       }
-    } else if (action === 'SKIP') {
-      io.to(roomId).emit('game_message', 'قرر الهوست عدم طرد أحد وإنهاء اليوم.');
-    }
-
-    checkWinCondition(roomId);
-
-    if (rooms[roomId] && rooms[roomId].phase !== PHASES.GAME_OVER) {
-      setTimeout(() => {
-        startNightCycle(roomId);
-      }, 4000);
     }
   });
 
-  // **قائمة الآدمن**: طرد لاعب نهائياً من الغرفة
+  // === ADMIN KICK (Any Phase) ===
   socket.on('admin_kick_player', ({ roomId, targetId }) => {
     const room = rooms[roomId];
     if (!room) return;
-
-    // تأكد من صلاحية الهوست
     const sender = room.players.find(p => p.socketId === socket.id);
-    if (!sender || sender.id !== room.hostId) return;
+    if (!sender || !sender.isHost) return;
 
-    const pIndex = room.players.findIndex(p => p.id === targetId);
-    if (pIndex !== -1) {
-      const removedName = room.players[pIndex].name;
-
-      // إخبار اللاعب المطرود
-      io.to(room.players[pIndex].socketId).emit('force_disconnect');
-
-      // حذفه من القائمة
-      room.players.splice(pIndex, 1);
-
+    const idx = room.players.findIndex(p => p.id === targetId);
+    if (idx !== -1) {
+      const p = room.players[idx];
+      io.to(p.socketId).emit('force_disconnect'); // Kick client side
+      room.players.splice(idx, 1); // Remove from array
       io.to(roomId).emit('update_players', room.players);
-      io.to(roomId).emit('game_message', `قام الهوست بطرد ${removedName} من الغرفة.`);
+      io.to(roomId).emit('game_message', `تم طرد ${p.name} من الغرفة 🚫`);
     }
   });
+
+  // === UTILS ===
+  function updatePhase(roomId, phase) {
+    if (rooms[roomId]) {
+      rooms[roomId].phase = phase;
+      io.to(roomId).emit('phase_change', phase);
+    }
+  }
 
   function checkWinCondition(roomId) {
     const room = rooms[roomId];
     if (!room) return;
 
-    const mafiaAlive = room.players.filter(p => p.isAlive && p.role === 'MAFIA').length;
-    const citizensAlive = room.players.filter(p => p.isAlive && p.role !== 'MAFIA').length;
+    const mafiaCount = room.players.filter(p => p.isAlive && p.role === 'MAFIA').length;
+    const citizenCount = room.players.filter(p => p.isAlive && p.role !== 'MAFIA').length;
 
-    if (mafiaAlive === 0) {
+    if (mafiaCount === 0) {
       updatePhase(roomId, PHASES.GAME_OVER);
       io.to(roomId).emit('game_over', 'CITIZENS');
-    } else if (mafiaAlive >= citizensAlive) {
+    } else if (mafiaCount >= citizenCount) {
       updatePhase(roomId, PHASES.GAME_OVER);
       io.to(roomId).emit('game_over', 'MAFIA');
     }
   }
 
-  function updatePhase(roomId, newPhase) {
-    if (rooms[roomId]) {
-      rooms[roomId].phase = newPhase;
-      io.to(roomId).emit('phase_change', newPhase);
-    }
-  }
-
   socket.on('disconnect', () => {
-    console.log('User Disconnected (Session Kept)', socket.id);
+    // We do NOT remove players on disconnect to allow persistence
+    console.log('socket disconnected', socket.id);
   });
 });
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`SERVER RUNNING ON PORT ${PORT}`);
+  console.log(`SERVER RUNNING ON ${PORT}`);
 });

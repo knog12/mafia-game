@@ -4,10 +4,11 @@ import { Howl } from 'howler';
 import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 
-// **مهم:** ضع رابط سيرفرك هنا
-const socket = io('https://mafia-game-dpfv.onrender.com');
+// === CONFIG ===
+const SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
+const socket = io(SERVER_URL);
 
-// مكتبة الأصوات
+// === SOUNDS ===
 const sounds = {
   everyone_sleep: new Howl({ src: ['/sounds/everyone_sleep.mp3'] }),
   mafia_wake: new Howl({ src: ['/sounds/mafia_wake.mp3'] }),
@@ -19,24 +20,23 @@ const sounds = {
 };
 
 export default function App() {
-  // بيانات أساسية
-  const [playerId, setPlayerId] = useState(localStorage.getItem('mafia_playerId') || '');
-  const [name, setName] = useState(localStorage.getItem('mafia_playerName') || '');
-
-  // حالة اللعبة
-  const [view, setView] = useState('LOGIN');
+  // === STATE ===
+  const [playerId, setPlayerId] = useState('');
+  const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
+  const [view, setView] = useState('LOGIN'); // LOGIN | LOBBY | GAME
   const [players, setPlayers] = useState([]);
   const [myPlayer, setMyPlayer] = useState(null);
   const [phase, setPhase] = useState('LOBBY');
   const [msg, setMsg] = useState('');
-  const [investigation, setInvestigation] = useState(null);
+  const [investigationResult, setInvestigationResult] = useState(null);
 
-  // حالة قائمة الآدمن
+  // Admin Menu
   const [showAdminMenu, setShowAdminMenu] = useState(false);
 
+  // === INIT & EFFECTS ===
   useEffect(() => {
-    // 1. إعداد الـ UUID للاعب عند البدء
+    // 1. UUID & LocalStorage Init
     let storedId = localStorage.getItem('mafia_playerId');
     if (!storedId) {
       storedId = uuidv4();
@@ -44,21 +44,24 @@ export default function App() {
     }
     setPlayerId(storedId);
 
-    // 2. محاولة إعادة الاتصال التلقائية
+    const storedName = localStorage.getItem('mafia_playerName');
+    if (storedName) setName(storedName);
+
+    // 2. Auto-Reconnect
     const savedRoom = localStorage.getItem('mafia_savedRoom');
-    if (savedRoom && storedId && name) {
-      console.log('Attempting auto-reconnect:', { savedRoom, name, storedId });
+    if (savedRoom && storedId && storedName) {
+      console.log('Auto-reconnecting to:', savedRoom);
       setRoomId(savedRoom);
-      socket.emit('join_room', { roomId: savedRoom, playerName: name, playerId: storedId });
+      socket.emit('join_room', { roomId: savedRoom, playerName: storedName, playerId: storedId });
     }
 
+    // 3. Socket Listeners
     socket.on('room_created', (id) => {
       setRoomId(id);
       localStorage.setItem('mafia_savedRoom', id);
       setView('LOBBY');
     });
 
-    // **إصلاح مشكلة الدخول**: الانتقال للوبي عند نجاح الانضمام
     socket.on('joined_room', (id) => {
       setRoomId(id);
       localStorage.setItem('mafia_savedRoom', id);
@@ -67,22 +70,17 @@ export default function App() {
 
     socket.on('update_players', (list) => {
       setPlayers(list);
-      // البحث عن نفسي باستخدام playerId الثابت
+      // Update myPlayer reference
       const me = list.find(p => p.id === storedId);
       if (me) setMyPlayer(me);
     });
 
-    socket.on('player_reconnected', ({ player, players }) => {
-      console.log('Successfully reconnected!');
+    socket.on('player_reconnected', ({ player, players: list, phase }) => {
       setMyPlayer(player);
-      setPlayers(players);
-      setView(player.phase === 'LOBBY' ? 'LOBBY' : 'GAME');
-      if (player.phase !== 'LOBBY') setPhase(player.phase || 'GAME');
-    });
-
-    socket.on('game_state_update', ({ phase }) => {
+      setPlayers(list);
       setPhase(phase);
-      if (phase !== 'LOBBY') setView('GAME');
+      setView(phase === 'LOBBY' ? 'LOBBY' : 'GAME');
+      console.log('Restored State:', phase);
     });
 
     socket.on('game_started', (list) => {
@@ -94,41 +92,45 @@ export default function App() {
 
     socket.on('phase_change', (newPhase) => {
       setPhase(newPhase);
-      setInvestigation(null);
+      setInvestigationResult(null); // Clear old results
     });
 
     socket.on('play_audio', (key) => {
+      // Basic stop-all to prevent overlap (Server handles main timing, this is backup)
+      Object.keys(sounds).forEach(k => sounds[k].stop());
       if (sounds[key]) sounds[key].play();
     });
 
-    socket.on('day_result', ({ msg, players }) => {
+    socket.on('day_result', ({ msg, players: list }) => {
       setMsg(msg);
-      setPlayers(players);
-      setTimeout(() => setMsg(''), 5000);
+      setPlayers(list);
+      setTimeout(() => setMsg(''), 6000);
     });
 
-    socket.on('game_message', (msg) => {
-      setMsg(msg);
-      setTimeout(() => setMsg(''), 5000);
+    socket.on('game_message', (txt) => {
+      setMsg(txt);
+      setTimeout(() => setMsg(''), 4000);
     });
 
-    socket.on('investigation_result', (res) => setInvestigation(res));
-
-    socket.on('force_disconnect', () => {
-      alert('تم طردك من الغرفة من قبل الهوست.');
-      setView('LOGIN');
-      setRoomId('');
-      localStorage.removeItem('mafia_savedRoom');
+    socket.on('investigation_result', (txt) => {
+      setInvestigationResult(txt);
     });
 
     socket.on('game_over', (winner) => {
       setPhase('GAME_OVER');
-      setMsg(winner === 'MAFIA' ? 'انتصرت المافيا!' : 'انتصر المواطنون!');
+      setMsg(`🏆 GAME OVER! Winner: ${winner} 🏆`);
+    });
+
+    socket.on('force_disconnect', () => {
+      localStorage.removeItem('mafia_savedRoom');
+      setRoomId('');
+      setView('LOGIN');
+      alert('You have been kicked by the Host.');
     });
 
     socket.on('error', (err) => {
-      console.error('Socket Error:', err);
-      if (err === 'الغرفة غير موجودة' || err.includes('اللعبة بدأت')) {
+      console.error(err);
+      if (err.includes('الغرفة غير موجودة') || err.includes('started')) {
         localStorage.removeItem('mafia_savedRoom');
         setView('LOGIN');
       }
@@ -136,267 +138,285 @@ export default function App() {
     });
 
     return () => socket.off();
-  }, [playerId, name]);
+  }, [playerId]);
 
-  const handleNameChange = (e) => {
-    const newName = e.target.value;
-    setName(newName);
-    localStorage.setItem('mafia_playerName', newName);
-  };
-
-  const createRoom = () => {
-    if (!name) return alert('اكتب اسمك أولاً');
+  // === HANDLERS ===
+  const handleCreate = () => {
+    if (!name) return alert('Name Required');
+    localStorage.setItem('mafia_playerName', name);
     socket.emit('create_room', { playerName: name, playerId });
   };
 
-  const joinRoom = () => {
-    if (!name || !roomId) return alert('البيانات ناقصة');
+  const handleJoin = () => {
+    if (!name || !roomId) return alert('Name & Code Required');
+    localStorage.setItem('mafia_playerName', name);
     socket.emit('join_room', { roomId, playerName: name, playerId });
   };
 
-  const startGame = () => {
-    if (players.length < 3) return alert('يجب أن يكون الحد الأدنى 3 لاعبين!');
+  const handleStart = () => {
     socket.emit('start_game', { roomId });
   };
 
-  const sendAction = (targetId) => {
-    if (!myPlayer || !myPlayer.isAlive) return;
-    socket.emit('player_action', { roomId, action: 'USE_ABILITY', targetId });
+  const handleAction = (targetId) => {
+    if (!myPlayer?.isAlive) return;
+    socket.emit('player_action', { roomId, action: 'USE', targetId });
   };
 
-  const hostDayAction = (action, targetId = null) => {
-    socket.emit('host_action_day', { roomId, action, targetId });
+  const handleHostDayAction = (action, targetId = null) => {
+    if (!myPlayer?.isHost) return;
+    if (confirm('Are you sure?')) {
+      socket.emit('host_action_day', { roomId, action, targetId });
+    }
   };
 
-  const adminKick = (targetId) => {
-    if (confirm('هل أنت متأكد من طرد هذا اللاعب نهائياً من الغرفة؟')) {
+  const handleAdminKick = (targetId) => {
+    if (confirm('Kick this player permanently?')) {
       socket.emit('admin_kick_player', { roomId, targetId });
     }
   };
 
-  // --- الرندر ---
+  // === RENDER HELPERS ===
+  const isNight = phase.includes('NIGHT');
+  const isMyTurn = (phase === 'NIGHT_MAFIA' && myPlayer?.role === 'MAFIA') ||
+    (phase === 'NIGHT_NURSE' && myPlayer?.role === 'DOCTOR') ||
+    (phase === 'NIGHT_DETECTIVE' && myPlayer?.role === 'DETECTIVE');
 
-  // 1. شاشة الدخول (تصميم الحوش)
+  const isHostDayTurn = (phase === 'DAY_DISCUSSION' && myPlayer?.isHost);
+
+  // === VIEWS ===
+
+  // 1. LOGIN VIEW
   if (view === 'LOGIN') {
     return (
-      <div className="min-h-screen bg-[#111827] flex flex-col items-center justify-center p-4 font-sans dir-rtl">
-        {/* العنوان */}
-        <h1 className="text-6xl font-extrabold mb-12 text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 drop-shadow-lg tracking-wide">
-          الحوش
-        </h1>
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 dir-rtl relative overflow-hidden text-white font-sans">
+        <div className="absolute inset-0 bg-gradient-radial from-slate-900 to-black z-0" />
 
-        <div className="bg-[#1f2937] p-8 rounded-2xl shadow-2xl w-full max-w-md border border-[#374151]">
+        <div className="z-10 w-full max-w-md flex flex-col items-center">
+          <h1 className="text-8xl font-black mb-4 text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 to-cyan-500 drop-shadow-2xl">
+            الحوش
+          </h1>
+          <p className="tracking-[0.4em] text-cyan-300 opacity-80 mb-12 uppercase">Mafia Night</p>
 
-          <div className="mb-6">
-            <label className="block text-slate-400 mb-2 text-right">أسمك:</label>
+          <div className="w-full bg-slate-900/60 backdrop-blur-xl border border-slate-700/50 p-8 rounded-3xl shadow-2xl">
             <input
-              className="w-full p-4 rounded-xl bg-[#374151] text-white placeholder-slate-500 text-center focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all border border-slate-600"
-              placeholder="اكتب اسمك هنا"
+              className="w-full bg-slate-800 text-white text-center p-4 rounded-xl mb-4 text-xl border border-slate-700 focus:border-pink-500 focus:outline-none transition-colors"
+              placeholder="اسمك المستعار..."
               value={name}
-              onChange={handleNameChange}
+              onChange={e => setName(e.target.value)}
             />
-          </div>
 
-          <button
-            onClick={createRoom}
-            className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white font-bold py-4 rounded-xl mb-6 shadow-lg transform transition active:scale-95 flex justify-center items-center gap-2"
-          >
-            إنشاء لعبة جديدة 🎮
-          </button>
-
-          <div className="w-full h-px bg-slate-600 mb-6"></div>
-
-          <div className="flex gap-3">
-            <input
-              className="flex-1 p-4 rounded-xl bg-[#374151] text-white placeholder-slate-500 text-center border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 uppercase font-mono tracking-widest"
-              placeholder="CODE"
-              value={roomId}
-              onChange={e => setRoomId(e.target.value)}
-            />
             <button
-              onClick={joinRoom}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-8 rounded-xl font-bold py-4 shadow-lg transition active:scale-95"
+              onClick={handleCreate}
+              className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold text-lg shadow-lg hover:brightness-110 active:scale-95 transition-all mb-6"
             >
-              دخول
+              🎮 إنشاء غرفة
             </button>
+
+            <div className="border-t border-slate-700 my-4" />
+
+            <div className="flex gap-2">
+              <input
+                className="flex-1 bg-slate-800 text-center p-4 rounded-xl border border-slate-700 uppercase font-mono tracking-widest text-lg focus:border-cyan-500 focus:outline-none"
+                placeholder="CODE"
+                value={roomId}
+                onChange={e => setRoomId(e.target.value)}
+              />
+              <button
+                onClick={handleJoin}
+                className="px-8 bg-cyan-600 rounded-xl font-bold hover:bg-cyan-500 active:scale-95 transition-all"
+              >
+                دخول
+              </button>
+            </div>
           </div>
-
         </div>
-
-        <p className="mt-8 text-slate-500 text-sm">Mafia Game &copy; 2025</p>
       </div>
     );
   }
 
-  // 2. اللوبي
+  // 2. LOBBY VIEW
   if (view === 'LOBBY') {
     return (
-      <div className="min-h-screen bg-slate-900 text-white p-4">
-        <div className="max-w-2xl mx-auto">
+      <div className="min-h-screen bg-slate-950 text-white p-6 dir-rtl font-sans bg-[url('/bg-pattern.png')]">
+        {/* Header */}
+        <div className="flex justify-between items-center mb-10">
+          <div className="bg-slate-900 px-6 py-3 rounded-full border border-slate-700 shadow-xl flex gap-3 items-center">
+            <span className="text-slate-400">ROOM:</span>
+            <span className="text-4xl font-mono text-cyan-400 tracking-widest font-black">{roomId}</span>
+          </div>
+
           {myPlayer?.isHost && (
-            <div className="absolute top-4 left-4 z-50">
-              <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-slate-700 p-2 rounded text-2xl">☰</button>
-              {showAdminMenu && (
-                <div className="absolute left-0 mt-2 w-64 bg-slate-800 rounded shadow-xl border border-slate-600">
-                  <h4 className="p-2 border-b border-slate-600 font-bold text-red-400">طرد اللاعبين (Admin)</h4>
-                  {players.filter(p => p.id !== myPlayer.id).map(p => (
-                    <div key={p.id} className="flex justify-between items-center p-2 hover:bg-slate-700">
-                      <span>{p.name} {p.avatar}</span>
-                      <button onClick={() => adminKick(p.id)} className="text-red-500 text-sm border border-red-500 px-2 py-1 rounded hover:bg-red-900">طرد</button>
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div className="relative z-50">
+              <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-slate-800 p-3 rounded-xl hover:bg-slate-700 border border-slate-600 text-2xl">
+                ≡
+              </button>
+              <AnimatePresence>
+                {showAdminMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                    className="absolute left-0 mt-2 w-64 bg-slate-900 border border-slate-600 rounded-xl shadow-2xl p-2"
+                  >
+                    <div className="text-xs text-red-400 font-bold mb-2 px-2 uppercase tracking-wider">Kick Players</div>
+                    {players.filter(p => p.id !== myPlayer?.id).map(p => (
+                      <div key={p.id} className="flex justify-between items-center p-2 hover:bg-slate-800 rounded-lg">
+                        <span>{p.name}</span>
+                        <button onClick={() => handleAdminKick(p.id)} className="bg-red-500/20 text-red-500 px-2 py-1 text-xs rounded border border-red-500/50">Kick</button>
+                      </div>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           )}
+        </div>
 
-          <div className="flex justify-between items-center mb-8 bg-slate-800 p-4 rounded-lg mt-12 border border-slate-700">
-            <h2 className="text-xl">رمز الغرفة: <span className="text-green-400 font-mono text-2xl tracking-widest">{roomId}</span></h2>
-            <div className="bg-blue-900 px-3 py-1 rounded-full text-sm">اللاعبون: {players.length}</div>
-          </div>
+        {/* Players Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
+          {players.map(p => (
+            <motion.div layout key={p.id} className="bg-slate-900/50 backdrop-blur border border-slate-800 p-6 rounded-3xl flex flex-col items-center relative overflow-hidden group">
+              <div className="text-7xl mb-4 drop-shadow-lg group-hover:scale-110 transition-transform">{p.avatar}</div>
+              <div className="font-bold text-2xl truncate">{p.name}</div>
+              {p.isHost && <span className="absolute top-4 right-4 bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded-full text-xs border border-yellow-500/50">HOST</span>}
+            </motion.div>
+          ))}
+        </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
-            {players.map(p => (
-              <div key={p.id} className="bg-slate-800 p-4 rounded-xl border border-slate-700 flex flex-col items-center shadow-md">
-                <div className="text-5xl mb-3">{p.avatar}</div>
-                <div className="font-bold text-lg">{p.name}</div>
-                {p.isHost && <span className="text-xs bg-yellow-500/20 text-yellow-500 px-2 py-0.5 rounded mt-1 border border-yellow-500/50">Leader</span>}
-              </div>
-            ))}
-          </div>
-
-          {myPlayer?.isHost && (
-            <button onClick={startGame} className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 py-4 rounded-xl text-xl font-bold shadow-lg transform active:scale-95 transition">
-              ابدأ اللعبة 🎮
+        {/* Start Button */}
+        <div className="fixed bottom-10 left-0 w-full flex justify-center px-4">
+          {myPlayer?.isHost ? (
+            <button onClick={handleStart} className="w-full max-w-lg py-5 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl font-bold text-2xl shadow-2xl shadow-emerald-500/30 hover:scale-105 transition-all">
+              START GAME 🚀
             </button>
+          ) : (
+            <div className="text-slate-500 animate-pulse text-xl">Waiting for Host...</div>
           )}
-          {!myPlayer?.isHost && <div className="text-center p-8 bg-slate-800/50 rounded-xl border border-slate-700 animate-pulse text-slate-400">في انتظار الهوست لبدء اللعبة...</div>}
         </div>
       </div>
     );
   }
 
-  // 3. اللعبة
-  const isNight = phase.includes('NIGHT');
-  const myNightTurn = (phase === 'NIGHT_MAFIA' && myPlayer.role === 'MAFIA') ||
-    (phase === 'NIGHT_NURSE' && myPlayer.role === 'DOCTOR') ||
-    (phase === 'NIGHT_DETECTIVE' && myPlayer.role === 'DETECTIVE');
-
-  const isDayDiscussion = phase === 'DAY_DISCUSSION';
-  const myHostTurn = isDayDiscussion && myPlayer.isHost;
-
+  // 3. GAME VIEW
   return (
-    <div className={`min-h-screen transition-colors duration-1000 ${isNight ? 'bg-black text-slate-300' : 'bg-sky-100 text-slate-800'}`}>
+    <div className={`min-h-screen transition-colors duration-1000 ${isNight ? 'bg-black' : 'bg-slate-900'} text-white overflow-hidden relative font-sans`}>
 
-      {/* Admin Menu in Game */}
-      {myPlayer?.isHost && (
-        <div className="absolute top-20 left-4 z-50">
-          <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-black/50 p-2 rounded text-xl text-white">☰</button>
-          {showAdminMenu && (
-            <div className="absolute left-0 mt-2 w-64 bg-slate-900 text-white rounded shadow-xl border border-slate-600">
-              <h4 className="p-2 border-b border-slate-600 font-bold text-red-400">إدارة اللاعبين</h4>
-              {players.filter(p => p.id !== myPlayer.id).map(p => (
-                <div key={p.id} className="flex justify-between items-center p-2 hover:bg-slate-800">
-                  <span>{p.name}</span>
-                  <button onClick={() => adminKick(p.id)} className="text-red-500 text-xs border border-red-500 px-2 py-1 rounded">طرد</button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className={`p-4 shadow-md ${isNight ? 'bg-slate-900' : 'bg-white'} flex justify-between items-center sticky top-0 z-10`}>
+      {/* Top Bar */}
+      <div className="absolute top-0 w-full p-4 z-40 bg-gradient-to-b from-black/80 to-transparent flex justify-between items-start">
         <div>
-          <h2 className="text-lg font-bold">أنت: <span className="text-blue-500">{myPlayer.name}</span></h2>
-          <p className="text-sm opacity-75">الدور: {myPlayer.role}</p>
+          <div className="text-sm text-slate-400">Name: <span className="text-white font-bold">{myPlayer?.name}</span></div>
+          <div className="text-sm text-slate-400">Role: <span className={`font-bold ${myPlayer?.role === 'MAFIA' ? 'text-red-500' : 'text-cyan-400'}`}>{myPlayer?.role}</span></div>
         </div>
-        <div className="text-center">
-          <div className="text-xl font-bold">{phase.replace(/_/g, ' ')}</div>
+
+        {/* In-Game Admin Menu */}
+        {myPlayer?.isHost && (
+          <div className="relative">
+            <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-black/50 p-2 rounded text-white text-2xl backdrop-blur">≡</button>
+            {showAdminMenu && (
+              <div className="absolute left-0 mt-2 w-64 bg-slate-900/95 border border-slate-600 rounded-xl p-2 right-0">
+                <div className="text-xs text-red-500 font-bold p-2">KICK MENU</div>
+                {players.filter(p => !p.isHost).map(p => (
+                  <div key={p.id} className="flex justify-between p-2 hover:bg-slate-800 text-sm">
+                    <span>{p.name} {p.isAlive ? '' : '💀'}</span>
+                    <button onClick={() => handleAdminKick(p.id)} className="text-red-400 border border-red-900 px-1 rounded">❌</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Phase Indicator */}
+      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30">
+        <div className="px-6 py-2 rounded-full bg-slate-800/80 backdrop-blur border border-slate-600 font-mono text-sm tracking-widest uppercase">
+          {phase.replace('_', ' ')}
         </div>
       </div>
 
+      {/* Notifications */}
       <AnimatePresence>
         {msg && (
-          <motion.div
-            initial={{ opacity: 0, y: -50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="fixed top-24 left-0 right-0 z-50 flex justify-center"
-          >
-            <div className="bg-yellow-500 text-black px-6 py-3 rounded-full font-bold shadow-xl border-2 border-black">
+          <motion.div initial={{ y: -100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -100, opacity: 0 }} className="fixed top-24 left-0 w-full z-50 flex justify-center pointer-events-none">
+            <div className="bg-slate-800 border border-slate-600 text-white px-8 py-4 rounded-2xl shadow-2xl text-xl max-w-lg text-center backdrop-blur-xl">
               {msg}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="p-4 max-w-4xl mx-auto mt-4 pb-20">
-
-        {isNight && !myNightTurn && myPlayer.isAlive && (
-          <div className="fixed inset-0 bg-black z-40 flex flex-col items-center justify-center">
-            <div className="text-6xl mb-4">😴</div>
-            <h2 className="text-2xl text-slate-500">المدينة نائمة...</h2>
+      {/* Investigation Result Pop-up */}
+      {investigationResult && (
+        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+          <div className="bg-purple-900/90 p-10 rounded-3xl border-2 border-purple-500 text-center shadow-[0_0_50px_rgba(168,85,247,0.5)]">
+            <div className="text-6xl mb-4">🕵️‍♂️</div>
+            <h2 className="text-3xl font-bold mb-2">Investigation Result</h2>
+            <div className="text-4xl font-mono bg-black/50 p-4 rounded-xl mt-4">{investigationResult}</div>
           </div>
-        )}
+        </motion.div>
+      )}
 
-        {investigation && (
-          <div className="bg-purple-900 text-white p-4 rounded mb-4 text-center border-2 border-purple-500 animate-bounce">
-            🕵️‍♂️ نتيجة التحقيق: {investigation}
-          </div>
-        )}
-
-        {isDayDiscussion && myPlayer.isHost && (
-          <div className="bg-slate-800 text-white p-4 rounded-xl mb-6 border-2 border-red-500 shadow-lg">
-            <h3 className="text-center text-xl font-bold mb-4 text-red-400">💀 تحكم الهوست (النهار) 💀</h3>
-            <p className="text-center text-sm mb-4 text-slate-300">أنت الحكم. اضغط على أي لاعب لطرده، أو اضغط زر التخطي.</p>
-
-            <button
-              onClick={() => hostDayAction('SKIP')}
-              className="w-full bg-green-600 hover:bg-green-700 py-3 rounded font-bold text-lg mb-2"
-            >
-              تخطي اليوم (لا أحد يموت) ⏭️
-            </button>
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {players.map(p => (
-            <div
-              key={p.id}
-              onClick={() => {
-                if (myNightTurn) sendAction(p.id);
-                if (myHostTurn && p.isAlive) {
-                  if (confirm(`هل تريد طرد ${p.name}؟`)) hostDayAction('KICK', p.id);
-                }
-              }}
-              className={`
-                relative p-4 rounded-xl border-2 transition-all cursor-pointer
-                ${!p.isAlive ? 'bg-red-900 opacity-50 grayscale' : isNight ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}
-                ${(myNightTurn || myHostTurn) && p.isAlive && p.id !== myPlayer.id ? 'hover:border-yellow-400 hover:scale-105' : ''}
-              `}
-            >
-              <div className="text-5xl text-center mb-2">{p.isAlive ? p.avatar : '💀'}</div>
-              <div className="text-center font-bold">{p.name}</div>
-              {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center text-red-500 font-bold text-2xl rotate-12 border-4 border-red-500 rounded-xl">ميت</div>}
-
-              {myHostTurn && p.isAlive && (
-                <div className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1 text-xs shadow-sm">
-                  ❌ طرد
-                </div>
-              )}
-            </div>
-          ))}
+      {/* Night Overlay */}
+      {isNight && !isMyTurn && myPlayer?.isAlive && (
+        <div className="fixed inset-0 bg-black/95 z-30 flex flex-col items-center justify-center p-8 text-center text-slate-600">
+          <motion.div animate={{ scale: [1, 1.1, 1], opacity: [0.3, 0.7, 0.3] }} transition={{ repeat: Infinity, duration: 3 }} className="text-9xl mb-8">🌑</motion.div>
+          <h2 className="text-4xl font-light tracking-widest">NIGHT FALLS</h2>
+          <p className="mt-4 text-xl">The city is sleeping...</p>
         </div>
+      )}
+
+      {/* Host Controls (Day Only) */}
+      {isHostDayTurn && (
+        <div className="fixed top-28 w-full z-40 flex justify-center">
+          <div className="bg-slate-800/90 border border-red-500/50 p-4 rounded-2xl flex gap-4 backdrop-blur shadow-2xl">
+            <div className="text-red-400 font-bold flex items-center px-4 border-r border-slate-600">
+              HOST CONTROLS
+            </div>
+            <button onClick={() => handleHostDayAction('SKIP')} className="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-xl font-bold transition-all">SKIP DAY ⏭️</button>
+            <div className="text-slate-400 text-xs flex items-center max-w-xs">
+              Select a player below to EXECUTE (Kick)
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Game Grid */}
+      <div className="pt-32 p-4 grid grid-cols-2 md:grid-cols-4 gap-4 pb-32 max-w-5xl mx-auto">
+        {players.map(p => (
+          <motion.div
+            layout
+            key={p.id}
+            onClick={() => {
+              if (isMyTurn && p.isAlive) handleAction(p.id);
+              if (isHostDayTurn && p.isAlive) handleHostDayAction('KICK', p.id);
+            }}
+            className={`
+                        relative bg-slate-800 rounded-2xl p-6 flex flex-col items-center transition-all cursor-pointer border-2
+                        ${p.isAlive ? 'border-slate-700' : 'border-red-900 bg-slate-900 grayscale opacity-60'}
+                        ${(isMyTurn || isHostDayTurn) && p.isAlive && p.id !== myPlayer.id ? 'hover:border-yellow-400 hover:scale-105 hover:shadow-[0_0_20px_rgba(250,204,21,0.3)]' : ''}
+                        ${myPlayer.id === p.id ? 'ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-900' : ''}
+                    `}
+          >
+            <div className="text-6xl mb-3">{p.isAlive ? p.avatar : '💀'}</div>
+            <div className="font-bold text-center truncate w-full">{p.name}</div>
+            {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center text-red-600 font-black text-3xl opacity-80 rotate-[-20deg] border-4 border-red-600 rounded-xl">ELIMINATED</div>}
+
+            {isHostDayTurn && p.isAlive && (
+              <div className="absolute top-2 right-2 text-red-500 animate-pulse text-xl">☠️</div>
+            )}
+          </motion.div>
+        ))}
       </div>
 
-      <div className={`fixed bottom-0 w-full p-4 text-center ${isNight ? 'bg-slate-900 text-slate-400' : 'bg-white text-slate-600'} border-t`}>
-        {myPlayer.isAlive ?
-          (myNightTurn ? <span className="text-green-500 font-bold text-xl animate-pulse">⚡ دورك الآن! اختر لاعباً</span> :
-            myHostTurn ? <span className="text-red-600 font-bold text-xl animate-pulse">🚨 قرارك يا هوست: اطرد أو تخطى</span> :
-              "انتظر دورك...")
-          : <span className="text-red-500">أنت ميت، يمكنك المشاهدة فقط 👻</span>
-        }
+      {/* Footer Status */}
+      <div className="fixed bottom-0 w-full bg-gradient-to-t from-slate-900 to-transparent pt-20 pb-8 text-center z-40 pointer-events-none">
+        {myPlayer?.isAlive ? (
+          <div className="text-2xl font-bold animate-pulse">
+            {isMyTurn ? <span className="text-green-400">⚡ YOUR TURN ⚡</span> :
+              isHostDayTurn ? <span className="text-red-400">🚨 HOST DECISION 🚨</span> :
+                <span className="text-slate-500">Wait...</span>}
+          </div>
+        ) : (
+          <div className="text-red-500 font-bold text-xl">👻 YOU ARE DEAD</div>
+        )}
       </div>
 
     </div>
