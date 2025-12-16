@@ -45,7 +45,19 @@ export default function App() {
   const [showAdminMenu, setShowAdminMenu] = useState(false);
 
   // Derived State for "My Player"
-  const myPlayer = players.find(p => p.id === playerId);
+  // ROBUST MATCHING: Try ID -> Try SocketID -> Try Name
+  const myPlayer = players.find(p => p.id === playerId) ||
+    players.find(p => p.socketId === socket.id) ||
+    players.find(p => p.name === name);
+
+  // Sync ID if we found myself but IDs mismatch (Legacy Server Support)
+  useEffect(() => {
+    if (myPlayer && myPlayer.id !== playerId) {
+      console.log('Syncing Protocol ID:', myPlayer.id);
+      // We do NOT setPlayerId here to avoid loop, just rely on myPlayer derived check
+      // Or we could update localStorage if we trust the server ID more.
+    }
+  }, [myPlayer, playerId]);
 
   // === EFFECTS ===
   useEffect(() => {
