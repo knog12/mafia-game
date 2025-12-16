@@ -8,13 +8,13 @@ const socket = io('https://mafia-game-dpfv.onrender.com');
 
 // مكتبة الأصوات
 const sounds = {
-  everyone_sleep: new Howl({ src: ['/sounds/sleep.mp3'] }),
-  mafia_wake: new Howl({ src: ['/sounds/mafia.mp3'] }),
-  nurse_wake: new Howl({ src: ['/sounds/nurse.mp3'] }),
-  detective_wake: new Howl({ src: ['/sounds/detective.mp3'] }),
-  everyone_wake: new Howl({ src: ['/sounds/wake.mp3'] }),
-  result_success: new Howl({ src: ['/sounds/kill.mp3'] }),
-  result_fail: new Howl({ src: ['/sounds/safe.mp3'] })
+  everyone_sleep: new Howl({ src: ['/sounds/everyone_sleep.mp3'] }),
+  mafia_wake: new Howl({ src: ['/sounds/mafia_wake.mp3'] }),
+  nurse_wake: new Howl({ src: ['/sounds/nurse_wake.mp3'] }),
+  detective_wake: new Howl({ src: ['/sounds/detective_wake.mp3'] }),
+  everyone_wake: new Howl({ src: ['/sounds/everyone_wake.mp3'] }),
+  result_success: new Howl({ src: ['/sounds/result_success.mp3'] }),
+  result_fail: new Howl({ src: ['/sounds/result_fail.mp3'] })
 };
 
 export default function App() {
