@@ -14,10 +14,10 @@ const socket = io(SERVER_URL, {
 
 // === CONSTANTS ===
 const ROLES_AR = {
-  MAFIA: 'مافيا 👿',
-  DOCTOR: 'طبيب 🩺',
-  DETECTIVE: 'محقق (شايب) 🕵️‍♂️',
-  CITIZEN: 'مواطن 👤',
+  MAFIA: 'المافيا 🕴️',
+  DOCTOR: 'الممرضة 💉',
+  DETECTIVE: 'الشايب 👴',
+  CITIZEN: 'مواطن 🏘️',
   PENDING: 'جاري التوزيع...'
 };
 
