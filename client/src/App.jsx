@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
-import { Howl, Howler } from 'howler';
+import { Howl } from 'howler';
 import { motion, AnimatePresence } from 'framer-motion';
+import { v4 as uuidv4 } from 'uuid';
 
-// **مهم:** ضع رابط سيرفرك (Render) الخاص بك هنا
+// **مهم:** ضع رابط سيرفرك هنا
 const socket = io('https://mafia-game-dpfv.onrender.com');
 
 // مكتبة الأصوات
@@ -18,31 +19,55 @@ const sounds = {
 };
 
 export default function App() {
-  // حفظ الاسم في localStorage
+  // بيانات أساسية
+  const [playerId, setPlayerId] = useState(localStorage.getItem('mafia_playerId') || '');
   const [name, setName] = useState(localStorage.getItem('mafia_playerName') || '');
 
-  const [view, setView] = useState(name ? 'LOGIN' : 'LOGIN');
+  // حالة اللعبة
+  const [view, setView] = useState('LOGIN');
   const [roomId, setRoomId] = useState('');
   const [players, setPlayers] = useState([]);
   const [myPlayer, setMyPlayer] = useState(null);
   const [phase, setPhase] = useState('LOBBY');
-  const [timer, setTimer] = useState(0);
   const [msg, setMsg] = useState('');
   const [investigation, setInvestigation] = useState(null);
-  // بيانات التصويت والقرار
-  const [voteData, setVoteData] = useState(null);
-  const [currentVotes, setCurrentVotes] = useState({});
+
+  // حالة قائمة الآدمن
+  const [showAdminMenu, setShowAdminMenu] = useState(false);
 
   useEffect(() => {
+    // 1. إعداد الـ UUID للاعب عند البدء
+    let storedId = localStorage.getItem('mafia_playerId');
+    if (!storedId) {
+      storedId = uuidv4();
+      localStorage.setItem('mafia_playerId', storedId);
+    }
+    setPlayerId(storedId);
+
+    // 2. محاولة إعادة الاتصال إذا كانت الغرفة محفوظة (اختياري، لكن مفيد)
+    // const savedRoom = localStorage.getItem('mafia_savedRoom');
+    // if (savedRoom && name) {
+    //    setRoomId(savedRoom);
+    //    socket.emit('join_room', { roomId: savedRoom, playerName: name, playerId: storedId });
+    // }
+
     socket.on('room_created', (id) => {
       setRoomId(id);
+      localStorage.setItem('mafia_savedRoom', id);
       setView('LOBBY');
     });
 
     socket.on('update_players', (list) => {
       setPlayers(list);
-      const me = list.find(p => p.id === socket.id);
+      // البحث عن نفسي باستخدام playerId الثابت
+      const me = list.find(p => p.id === storedId);
       if (me) setMyPlayer(me);
+    });
+
+    socket.on('player_reconnected', ({ player, players }) => {
+      setMyPlayer(player);
+      setPlayers(players);
+      setView(player.phase === 'LOBBY' ? 'LOBBY' : 'GAME');
     });
 
     socket.on('game_state_update', ({ phase }) => {
@@ -52,7 +77,7 @@ export default function App() {
 
     socket.on('game_started', (list) => {
       setPlayers(list);
-      const me = list.find(p => p.id === socket.id);
+      const me = list.find(p => p.id === storedId);
       if (me) setMyPlayer(me);
       setView('GAME');
     });
@@ -60,7 +85,6 @@ export default function App() {
     socket.on('phase_change', (newPhase) => {
       setPhase(newPhase);
       setInvestigation(null);
-      setVoteData(null);
     });
 
     socket.on('play_audio', (key) => {
@@ -78,18 +102,13 @@ export default function App() {
       setTimeout(() => setMsg(''), 5000);
     });
 
-    socket.on('timer_update', (t) => setTimer(t));
     socket.on('investigation_result', (res) => setInvestigation(res));
 
-    socket.on('update_votes', (votes) => {
-      setCurrentVotes(votes);
-    });
-
-    // استقبال بيانات التصويت للهوست
-    socket.on('host_needs_decision', (data) => {
-      setVoteData(data);
-      setPhase('HOST_DECISION'); // تغيير المرحلة لشاشة القرار
-      setPlayers(data.players);
+    socket.on('force_disconnect', () => {
+      alert('تم طردك من الغرفة من قبل الهوست.');
+      setView('LOGIN');
+      setRoomId('');
+      localStorage.removeItem('mafia_savedRoom');
     });
 
     socket.on('game_over', (winner) => {
@@ -98,97 +117,50 @@ export default function App() {
     });
 
     return () => socket.off();
-  }, []);
+  }, [playerId, name]);
 
   const handleNameChange = (e) => {
     const newName = e.target.value;
     setName(newName);
-    localStorage.setItem('mafia_playerName', newName); // حفظ الاسم
+    localStorage.setItem('mafia_playerName', newName);
   };
 
   const createRoom = () => {
     if (!name) return alert('اكتب اسمك أولاً');
-    socket.emit('create_room', { playerName: name });
+    socket.emit('create_room', { playerName: name, playerId });
   };
 
   const joinRoom = () => {
     if (!name || !roomId) return alert('البيانات ناقصة');
-    socket.emit('join_room', { roomId, playerName: name });
-    setView('LOBBY');
+    socket.emit('join_room', { roomId, playerName: name, playerId });
   };
 
   const startGame = () => {
-    if (players.length < 5) return alert('يجب أن يكون الحد الأدنى 5 لاعبين!');
+    if (players.length < 3) return alert('يجب أن يكون الحد الأدنى 3 لاعبين!');
     socket.emit('start_game', { roomId });
   };
 
+  // الأكشن الليلي (مافيا، دكتور، محقق)
   const sendAction = (targetId) => {
-    if (!myPlayer.isAlive) return;
-    if (phase === 'DAY_VOTING') {
-      socket.emit('vote_player', { roomId, targetId });
-    } else {
-      socket.emit('player_action', { roomId, action: 'USE_ABILITY', targetId });
+    if (!myPlayer || !myPlayer.isAlive) return;
+    socket.emit('player_action', { roomId, action: 'USE_ABILITY', targetId });
+  };
+
+  // **صلاحية الهوست**: طرد لاعب أو تخطي (أثناء النهار)
+  const hostDayAction = (action, targetId = null) => {
+    socket.emit('host_action_day', { roomId, action, targetId });
+  };
+
+  // **قائمة الآدمن**: طرد من الغرفة
+  const adminKick = (targetId) => {
+    if (confirm('هل أنت متأكد من طرد هذا اللاعب نهائياً من الغرفة؟')) {
+      socket.emit('admin_kick_player', { roomId, targetId });
     }
   };
 
-  // دالة طلب إنهاء التصويت من الهوست في أي وقت
-  const hostEndVotingRequest = () => {
-    socket.emit('host_end_voting_request', { roomId });
-  };
+  // --- الرندر ---
 
-  // دالة اتخاذ القرار النهائي (الطرد أو السكب)
-  const hostMakeDecision = (decision, kickedPlayerId = null) => {
-    socket.emit('host_made_decision', { roomId, decision, kickedPlayerId });
-  };
-
-  // --- شاشات اللعبة ---
-
-  if (phase === 'HOST_DECISION' && myPlayer?.isHost && voteData) {
-    // تجهيز قائمة المرشحين بناءً على الأصوات
-    const candidates = Object.entries(voteData.voteCounts).map(([id, count]) => {
-      const player = players.find(p => p.id === id);
-      return { id, name: player ? player.name : 'مجهول', votes: count };
-    }).sort((a, b) => b.votes - a.motes); // يجب أن يكون b.votes
-
-    return (
-      <div className="min-h-screen bg-slate-900 text-white p-4">
-        <div className="max-w-2xl mx-auto mt-8">
-          <h2 className="text-3xl font-bold mb-6 text-red-500 text-center">🛑 قرار الهوست 🛑</h2>
-          <p className="text-lg mb-4 text-center">انتهى التصويت بقرار الهوست. المرجو اتخاذ قرار الطرد:</p>
-
-          <div className="bg-slate-800 p-4 rounded-xl mb-6">
-            <h3 className="text-xl font-semibold mb-3">نتائج التصويت:</h3>
-            {candidates.length > 0 ? candidates.map(c => (
-              <div key={c.id} className="flex justify-between items-center border-b border-slate-700 py-2">
-                <span>{c.name}</span>
-                <span className="text-yellow-400 font-bold">{c.votes} صوت</span>
-              </div>
-            )) : <p className="text-slate-400">لم يتم التصويت.</p>}
-          </div>
-
-          <div className="space-y-4">
-            {candidates.length > 0 && candidates.map(c => (
-              <button
-                key={c.id}
-                onClick={() => hostMakeDecision('KICK', c.id)}
-                className="w-full bg-red-700 hover:bg-red-800 py-3 rounded-lg font-bold transition"
-              >
-                طرد اللاعب: {c.name} ({c.votes} صوت)
-              </button>
-            ))}
-
-            <button
-              onClick={() => hostMakeDecision('SKIP')}
-              className="w-full bg-green-700 hover:bg-green-800 py-3 rounded-lg font-bold transition"
-            >
-              تخطي الجولة (لا طرد)
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
+  // 1. شاشة الدخول
   if (view === 'LOGIN') {
     return (
       <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
@@ -216,11 +188,29 @@ export default function App() {
     );
   }
 
+  // 2. اللوبي
   if (view === 'LOBBY') {
     return (
       <div className="min-h-screen bg-slate-900 text-white p-4">
         <div className="max-w-2xl mx-auto">
-          <div className="flex justify-between items-center mb-8 bg-slate-800 p-4 rounded-lg">
+          {myPlayer?.isHost && (
+            <div className="absolute top-4 left-4 z-50">
+              <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-slate-700 p-2 rounded text-2xl">☰</button>
+              {showAdminMenu && (
+                <div className="absolute left-0 mt-2 w-64 bg-slate-800 rounded shadow-xl border border-slate-600">
+                  <h4 className="p-2 border-b border-slate-600 font-bold text-red-400">طرد اللاعبين (Admin)</h4>
+                  {players.filter(p => p.id !== myPlayer.id).map(p => (
+                    <div key={p.id} className="flex justify-between items-center p-2 hover:bg-slate-700">
+                      <span>{p.name} {p.avatar}</span>
+                      <button onClick={() => adminKick(p.id)} className="text-red-500 text-sm border border-red-500 px-2 py-1 rounded hover:bg-red-900">طرد</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex justify-between items-center mb-8 bg-slate-800 p-4 rounded-lg mt-12">
             <h2 className="text-xl">رمز الغرفة: <span className="text-green-400 font-mono text-2xl tracking-widest">{roomId}</span></h2>
             <div className="bg-blue-900 px-3 py-1 rounded-full text-sm">اللاعبون: {players.length}</div>
           </div>
@@ -228,8 +218,8 @@ export default function App() {
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
             {players.map(p => (
               <div key={p.id} className="bg-slate-800 p-4 rounded border border-slate-700 flex flex-col items-center">
-                <div className="w-12 h-12 bg-slate-600 rounded-full mb-2 flex items-center justify-center text-xl">👤</div>
-                {p.name}
+                <div className="text-4xl mb-2">{p.avatar}</div>
+                <div className="font-bold">{p.name}</div>
                 {p.isHost && <span className="text-xs text-yellow-400 mt-1">HOST</span>}
               </div>
             ))}
@@ -246,14 +236,36 @@ export default function App() {
     );
   }
 
+  // 3. اللعبة
   const isNight = phase.includes('NIGHT');
-  const myTurn = (phase === 'NIGHT_MAFIA' && myPlayer.role === 'MAFIA') ||
+  // دورك إذا كان الليل ودورك، أو إذا كان النهار وأنت الهوست (للقرار)
+  const myNightTurn = (phase === 'NIGHT_MAFIA' && myPlayer.role === 'MAFIA') ||
     (phase === 'NIGHT_NURSE' && myPlayer.role === 'DOCTOR') ||
-    (phase === 'NIGHT_DETECTIVE' && myPlayer.role === 'DETECTIVE') ||
-    phase === 'DAY_VOTING';
+    (phase === 'NIGHT_DETECTIVE' && myPlayer.role === 'DETECTIVE');
+
+  const isDayDiscussion = phase === 'DAY_DISCUSSION';
+  const myHostTurn = isDayDiscussion && myPlayer.isHost;
 
   return (
     <div className={`min-h-screen transition-colors duration-1000 ${isNight ? 'bg-black text-slate-300' : 'bg-sky-100 text-slate-800'}`}>
+
+      {/* Admin Menu in Game */}
+      {myPlayer?.isHost && (
+        <div className="absolute top-20 left-4 z-50">
+          <button onClick={() => setShowAdminMenu(!showAdminMenu)} className="bg-black/50 p-2 rounded text-xl text-white">☰</button>
+          {showAdminMenu && (
+            <div className="absolute left-0 mt-2 w-64 bg-slate-900 text-white rounded shadow-xl border border-slate-600">
+              <h4 className="p-2 border-b border-slate-600 font-bold text-red-400">إدارة اللاعبين</h4>
+              {players.filter(p => p.id !== myPlayer.id).map(p => (
+                <div key={p.id} className="flex justify-between items-center p-2 hover:bg-slate-800">
+                  <span>{p.name}</span>
+                  <button onClick={() => adminKick(p.id)} className="text-red-500 text-xs border border-red-500 px-2 py-1 rounded">طرد</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className={`p-4 shadow-md ${isNight ? 'bg-slate-900' : 'bg-white'} flex justify-between items-center sticky top-0 z-10`}>
         <div>
@@ -262,7 +274,6 @@ export default function App() {
         </div>
         <div className="text-center">
           <div className="text-xl font-bold">{phase.replace(/_/g, ' ')}</div>
-          {timer > 0 && <div className="text-red-500 font-mono text-2xl">{timer}s</div>}
         </div>
       </div>
 
@@ -272,7 +283,7 @@ export default function App() {
             initial={{ opacity: 0, y: -50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="fixed top-20 left-0 right-0 z-50 flex justify-center"
+            className="fixed top-24 left-0 right-0 z-50 flex justify-center"
           >
             <div className="bg-yellow-500 text-black px-6 py-3 rounded-full font-bold shadow-xl border-2 border-black">
               {msg}
@@ -281,9 +292,9 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <div className="p-4 max-w-4xl mx-auto mt-4">
+      <div className="p-4 max-w-4xl mx-auto mt-4 pb-20">
 
-        {isNight && !myTurn && myPlayer.isAlive && (
+        {isNight && !myNightTurn && myPlayer.isAlive && (
           <div className="fixed inset-0 bg-black z-40 flex flex-col items-center justify-center">
             <div className="text-6xl mb-4">😴</div>
             <h2 className="text-2xl text-slate-500">المدينة نائمة...</h2>
@@ -296,14 +307,17 @@ export default function App() {
           </div>
         )}
 
-        {/* زر إنهاء التصويت في أي وقت للهوست */}
-        {phase === 'DAY_VOTING' && myPlayer?.isHost && (
-          <div className="text-center mb-4">
+        {/* لوحة تحكم الهوست في النهار */}
+        {isDayDiscussion && myPlayer.isHost && (
+          <div className="bg-slate-800 text-white p-4 rounded-xl mb-6 border-2 border-red-500 shadow-lg">
+            <h3 className="text-center text-xl font-bold mb-4 text-red-400">💀 تحكم الهوست (النهار) 💀</h3>
+            <p className="text-center text-sm mb-4 text-slate-300">أنت الحكم. اضغط على أي لاعب لطرده، أو اضغط زر التخطي.</p>
+
             <button
-              onClick={hostEndVotingRequest}
-              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition"
+              onClick={() => hostDayAction('SKIP')}
+              className="w-full bg-green-600 hover:bg-green-700 py-3 rounded font-bold text-lg mb-2"
             >
-              إنهاء التصويت والدخول في مرحلة القرار 🗳️
+              تخطي اليوم (لا أحد يموت) ⏭️
             </button>
           </div>
         )}
@@ -312,22 +326,27 @@ export default function App() {
           {players.map(p => (
             <div
               key={p.id}
-              onClick={() => sendAction(p.id)}
+              onClick={() => {
+                if (myNightTurn) sendAction(p.id);
+                if (myHostTurn && p.isAlive) {
+                  if (confirm(`هل تريد طرد ${p.name}؟`)) hostDayAction('KICK', p.id);
+                }
+              }}
               className={`
-                        relative p-4 rounded-xl border-2 transition-all cursor-pointer
-                        ${!p.isAlive ? 'bg-red-900 opacity-50 grayscale' : isNight ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}
-                        ${myTurn && p.isAlive && p.id !== myPlayer.id ? 'hover:border-yellow-400 hover:scale-105' : ''}
-                        ${phase === 'DAY_VOTING' && 'hover:bg-red-50'}
-                    `}
+                relative p-4 rounded-xl border-2 transition-all cursor-pointer
+                ${!p.isAlive ? 'bg-red-900 opacity-50 grayscale' : isNight ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}
+                ${(myNightTurn || myHostTurn) && p.isAlive && p.id !== myPlayer.id ? 'hover:border-yellow-400 hover:scale-105' : ''}
+              `}
             >
-              <div className="text-4xl text-center mb-2">{p.isAlive ? (p.avatar < 5 ? '👨' : '👩') : '💀'}</div>
+              <div className="text-5xl text-center mb-2">{p.isAlive ? p.avatar : '💀'}</div>
               <div className="text-center font-bold">{p.name}</div>
               {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center text-red-500 font-bold text-2xl rotate-12 border-4 border-red-500 rounded-xl">ميت</div>}
 
-              {phase === 'DAY_VOTING' && currentVotes[p.id] && (
-                <span className="absolute top-0 left-0 bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded-br-lg">
-                  صوت!
-                </span>
+              {/* أيقونة الطرد تظهر للهوست في النهار فوق اللاعب */}
+              {myHostTurn && p.isAlive && (
+                <div className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1 text-xs shadow-sm">
+                  ❌ طرد
+                </div>
               )}
             </div>
           ))}
@@ -336,7 +355,9 @@ export default function App() {
 
       <div className={`fixed bottom-0 w-full p-4 text-center ${isNight ? 'bg-slate-900 text-slate-400' : 'bg-white text-slate-600'} border-t`}>
         {myPlayer.isAlive ?
-          (myTurn ? <span className="text-green-500 font-bold text-xl animate-pulse">⚡ دورك الآن! اختر لاعباً</span> : "انتظر دورك...")
+          (myNightTurn ? <span className="text-green-500 font-bold text-xl animate-pulse">⚡ دورك الآن! اختر لاعباً</span> :
+            myHostTurn ? <span className="text-red-600 font-bold text-xl animate-pulse">🚨 قرارك يا هوست: اطرد أو تخطى</span> :
+              "انتظر دورك...")
           : <span className="text-red-500">أنت ميت، يمكنك المشاهدة فقط 👻</span>
         }
       </div>

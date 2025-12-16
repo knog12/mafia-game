@@ -7,13 +7,12 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 app.use(cors());
 
-// **مهم:** ضع رابط الواجهة (Vercel) الخاص بك هنا (مثال فقط)
 const VERCEL_URL = 'https://mafia-game.vercel.app';
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: [VERCEL_URL, "http://localhost:5173"],
+    origin: "*",
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -31,12 +30,11 @@ const PHASES = {
   NIGHT_NURSE: 'NIGHT_NURSE',
   NIGHT_DETECTIVE: 'NIGHT_DETECTIVE',
   DAY_WAKE: 'DAY_WAKE',
-  DAY_RESULTS: 'DAY_RESULTS',
   DAY_DISCUSSION: 'DAY_DISCUSSION',
-  DAY_VOTING: 'DAY_VOTING',
-  HOST_DECISION: 'HOST_DECISION',
   GAME_OVER: 'GAME_OVER'
 };
+
+const AVATARS = ['👨', '👩', '🕵️', '🤠', '🧙', '🧛', '🤖', '👽', '🤡', '👹'];
 
 // === دوال مساعدة ===
 function shuffleArray(array) {
@@ -52,59 +50,99 @@ io.on('connection', (socket) => {
   console.log('User Connected:', socket.id);
 
   // 1. إنشاء غرفة
-  socket.on('create_room', ({ playerName }) => {
+  socket.on('create_room', ({ playerName, playerId }) => {
     const roomId = uuidv4().substring(0, 4).toUpperCase();
     rooms[roomId] = {
       id: roomId,
-      hostId: socket.id,
+      hostId: playerId,
       players: [],
       phase: PHASES.LOBBY,
       mafiaTarget: null,
       nurseTarget: null,
       detectiveCheck: null,
-      votes: {},
       winner: null
     };
     socket.join(roomId);
-    rooms[roomId].players.push({
-      id: socket.id,
+
+    // إضافة اللاعب (الهوست)
+    const newHost = {
+      id: playerId,
+      socketId: socket.id,
       name: playerName,
       role: 'PENDING',
       isAlive: true,
-      avatar: Math.floor(Math.random() * 10),
+      avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
       isHost: true,
       hasSelfHealed: false
-    });
+    };
+
+    rooms[roomId].players.push(newHost);
     socket.emit('room_created', roomId);
     io.to(roomId).emit('update_players', rooms[roomId].players);
   });
 
-  // 2. دخول غرفة
-  socket.on('join_room', ({ roomId, playerName }) => {
+  // 2. دخول غرفة / إعادة الاتصال (Persistence)
+  socket.on('join_room', ({ roomId, playerName, playerId }) => {
     const room = rooms[roomId];
-    if (room && room.phase === PHASES.LOBBY) {
-      socket.join(roomId);
-      room.players.push({
-        id: socket.id,
+    if (!room) {
+      socket.emit('error', 'الغرفة غير موجودة');
+      return;
+    }
+
+    socket.join(roomId);
+
+    // التحقق هل اللاعب موجود مسبقاً (إعادة اتصال)
+    const existingPlayerIndex = room.players.findIndex(p => p.id === playerId);
+
+    if (existingPlayerIndex !== -1) {
+      // تحديث الـ socketId للاعب العائد
+      room.players[existingPlayerIndex].socketId = socket.id;
+
+      console.log(`Player ${playerName} reconnected.`);
+
+      // إرسال حالة اللعبة الحالية للاعب العائد
+      socket.emit('game_state_update', { phase: room.phase });
+      socket.emit('player_reconnected', {
+        player: room.players[existingPlayerIndex],
+        players: room.players
+      });
+      // تحديث القائمة للجميع للتأكد
+      io.to(roomId).emit('update_players', room.players);
+    } else {
+      // لاعب جديد
+      if (room.phase !== PHASES.LOBBY) {
+        socket.emit('error', 'اللعبة بدأت بالفعل، لا يمكن الانضمام كلاعب جديد.');
+        return;
+      }
+
+      const newPlayer = {
+        id: playerId,
+        socketId: socket.id,
         name: playerName,
         role: 'PENDING',
         isAlive: true,
-        avatar: Math.floor(Math.random() * 10),
+        avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
         isHost: false,
         hasSelfHealed: false
-      });
+      };
+
+      room.players.push(newPlayer);
       io.to(roomId).emit('update_players', room.players);
-      socket.emit('game_state_update', { phase: room.phase });
-    } else {
-      socket.emit('error', 'الغرفة غير موجودة أو اللعبة بدأت');
     }
   });
 
-  // 3. بدء اللعبة (توزيع الأدوار)
+  // 3. بدء اللعبة
   socket.on('start_game', ({ roomId }) => {
     const room = rooms[roomId];
-    const hostPlayer = room.players.find(p => p.id === socket.id && p.isHost);
-    if (!room || !hostPlayer) return;
+    if (!room) return;
+
+    // التحقق من أن المرسل هو الهوست
+    const sender = room.players.find(p => p.socketId === socket.id);
+    if (!sender || sender.id !== room.hostId) return;
+
+    if (room.players.length < 3) {
+      // يمكن تفعيل التحقق هنا
+    }
 
     const playerCount = room.players.length;
     let mafiaCount = playerCount < 9 ? 1 : 2;
@@ -131,6 +169,8 @@ io.on('connection', (socket) => {
   // === إدارة جولات الليل ===
   function startNightCycle(roomId) {
     const room = rooms[roomId];
+    if (!room) return;
+
     room.mafiaTarget = null;
     room.nurseTarget = null;
     room.detectiveCheck = null;
@@ -144,11 +184,12 @@ io.on('connection', (socket) => {
     }, 4000);
   }
 
-  // استقبال الأكشن من اللاعبين (قتل، حماية، كشف)
+  // استقبال الأكشن من اللاعبين
   socket.on('player_action', ({ roomId, action, targetId }) => {
     const room = rooms[roomId];
-    const player = room.players.find(p => p.id === socket.id);
-    if (!room || !player || !player.isAlive) return;
+    if (!room) return;
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player || !player.isAlive) return;
 
     if (room.phase === PHASES.NIGHT_MAFIA && player.role === 'MAFIA') {
       room.mafiaTarget = targetId;
@@ -156,24 +197,23 @@ io.on('connection', (socket) => {
       setTimeout(() => {
         updatePhase(roomId, PHASES.NIGHT_NURSE);
         io.to(roomId).emit('play_audio', 'nurse_wake');
-      }, 3000);
+      }, 2000);
     }
 
     if (room.phase === PHASES.NIGHT_NURSE && player.role === 'DOCTOR') {
-      if (targetId === socket.id) {
+      if (targetId === player.id) {
         if (player.hasSelfHealed) {
           socket.emit('error', 'لقد عالجت نفسك سابقاً!');
           return;
         }
         player.hasSelfHealed = true;
       }
-
       room.nurseTarget = targetId;
 
       setTimeout(() => {
         updatePhase(roomId, PHASES.NIGHT_DETECTIVE);
         io.to(roomId).emit('play_audio', 'detective_wake');
-      }, 3000);
+      }, 2000);
     }
 
     if (room.phase === PHASES.NIGHT_DETECTIVE && player.role === 'DETECTIVE') {
@@ -193,133 +233,96 @@ io.on('connection', (socket) => {
     updatePhase(roomId, PHASES.DAY_WAKE);
     io.to(roomId).emit('play_audio', 'everyone_wake');
 
-    let msg = "";
-    let audioToPlay = "";
-
-    if (room.mafiaTarget && room.mafiaTarget !== room.nurseTarget) {
-      const victimIndex = room.players.findIndex(p => p.id === room.mafiaTarget);
-      if (victimIndex !== -1) {
-        room.players[victimIndex].isAlive = false;
-        msg = `للأسف... تم اغتيال اللاعب ${room.players[victimIndex].name}`;
-        audioToPlay = 'result_success';
-      }
-    } else {
-      msg = "الليلة كانت آمنة! لم يمت أحد.";
-      audioToPlay = 'result_fail';
-    }
-
-    io.to(roomId).emit('day_result', { msg, players: room.players });
-    io.to(roomId).emit('play_audio', audioToPlay);
-
-    checkWinCondition(roomId);
-
+    // **تعديل الصوت المتداخل**: الانتظار قبل تشغيل صوت النتيجة
     setTimeout(() => {
+      let msg = "";
+      let audioToPlay = "";
+
+      if (room.mafiaTarget && room.mafiaTarget !== room.nurseTarget) {
+        const victimIndex = room.players.findIndex(p => p.id === room.mafiaTarget);
+        if (victimIndex !== -1) {
+          room.players[victimIndex].isAlive = false;
+          msg = `للأسف... تم اغتيال اللاعب ${room.players[victimIndex].name}`;
+          audioToPlay = 'result_success';
+        }
+      } else {
+        msg = "الليلة كانت آمنة! لم يمت أحد.";
+        audioToPlay = 'result_fail';
+      }
+
+      io.to(roomId).emit('day_result', { msg, players: room.players });
+      io.to(roomId).emit('play_audio', audioToPlay);
+
+      checkWinCondition(roomId);
+
+      // الانتقال لمرحلة النقاش (وانتظار قرار الهوست بلا مؤقت)
       if (room.phase !== PHASES.GAME_OVER) {
-        updatePhase(roomId, PHASES.DAY_DISCUSSION);
-        let timeLeft = 105;
-        const timer = setInterval(() => {
-          if (room.phase !== PHASES.DAY_DISCUSSION) { clearInterval(timer); return; }
-          io.to(roomId).emit('timer_update', timeLeft);
-          timeLeft--;
-          if (timeLeft < 0) {
-            clearInterval(timer);
-            startVoting(roomId); // ينتقل لـ DAY_VOTING
-          }
-        }, 1000);
+        setTimeout(() => {
+          updatePhase(roomId, PHASES.DAY_DISCUSSION);
+        }, 4000);
       }
-    }, 5000);
+    }, 4500);
   }
 
-  function startVoting(roomId) {
-    updatePhase(roomId, PHASES.DAY_VOTING);
-    rooms[roomId].votes = {};
-  }
-
-  // استقبال التصويت (الهوست يصوت أيضاً هنا)
-  socket.on('vote_player', ({ roomId, targetId }) => {
+  // **صلاحية الهوست الحصرية**: اتخاذ قرار في أي وقت بالنهار
+  socket.on('host_action_day', ({ roomId, action, targetId }) => {
     const room = rooms[roomId];
-    if (room.phase !== PHASES.DAY_VOTING) return;
+    if (!room) return;
 
-    // يسجل التصويت بغض النظر عمن هو المصوت (بما فيهم الهوست)
-    room.votes[socket.id] = targetId;
+    // التحقق من الهوست
+    const sender = room.players.find(p => p.socketId === socket.id);
+    if (!sender || sender.id !== room.hostId) return;
 
-    // إرسال تحديث لجميع اللاعبين (ومنهم الهوست)
-    io.to(roomId).emit('update_votes', room.votes);
-  });
+    if (room.phase !== PHASES.DAY_DISCUSSION) return;
 
-  // **صلاحية الهوست:** طلب إنهاء التصويت والدخول في مرحلة القرار في أي وقت
-  socket.on('host_end_voting_request', ({ roomId }) => {
-    const room = rooms[roomId];
-    // يجب أن يكون الهوست ومن مرحلة التصويت
-    if (!room || socket.id !== room.hostId || room.phase !== PHASES.DAY_VOTING) return;
-
-    processVotingForHost(roomId);
-  });
-
-  // دالة خاصة لإرسال النتائج للهوست لاتخاذ القرار
-  function processVotingForHost(roomId) {
-    const room = rooms[roomId];
-    updatePhase(roomId, PHASES.HOST_DECISION); // ينتقل لمرحلة القرار
-
-    const voteCounts = {};
-    // التأكد من أن الهوست يرى نتائج تصويت جميع اللاعبين
-    Object.values(room.votes).forEach(targetId => {
-      voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
-    });
-
-    // إيجاد أكثر شخص حصل على تصويت
-    let maxVotes = 0;
-    let candidateId = null;
-    for (const [id, count] of Object.entries(voteCounts)) {
-      // نتحقق من أن اللاعب المصوّت عليه لا يزال حياً
-      const isAlive = room.players.find(p => p.id === id)?.isAlive;
-      if (count > maxVotes && isAlive) {
-        maxVotes = count;
-        candidateId = id;
-      }
-    }
-
-    const candidate = room.players.find(p => p.id === candidateId);
-
-    // إرسال النتائج للهوست فقط
-    io.to(room.hostId).emit('host_needs_decision', {
-      candidateName: candidate ? candidate.name : 'لا يوجد مرشح واضح',
-      candidateId: candidateId,
-      voteCounts: voteCounts,
-      players: room.players
-    });
-  }
-
-  // قرار الهوست النهائي (إما طرد أو سكب)
-  socket.on('host_made_decision', ({ roomId, decision, kickedPlayerId }) => {
-    const room = rooms[roomId];
-    // يجب أن يكون الهوست ومن مرحلة القرار فقط
-    if (!room || socket.id !== room.hostId || room.phase !== PHASES.HOST_DECISION) return;
-
-    if (decision === 'KICK') {
-      const pIndex = room.players.findIndex(p => p.id === kickedPlayerId);
+    if (action === 'KICK') {
+      const pIndex = room.players.findIndex(p => p.id === targetId);
       if (pIndex !== -1) {
         room.players[pIndex].isAlive = false;
         io.to(roomId).emit('player_kicked', { name: room.players[pIndex].name });
         io.to(roomId).emit('game_message', `قرر الهوست طرد اللاعب: ${room.players[pIndex].name}`);
       }
-    } else if (decision === 'SKIP') {
-      io.to(roomId).emit('game_message', 'قرر الهوست عدم طرد أحد هذه الجولة.');
+    } else if (action === 'SKIP') {
+      io.to(roomId).emit('game_message', 'قرر الهوست عدم طرد أحد وإنهاء اليوم.');
     }
 
-    // بمجرد اتخاذ القرار، ينتقل مباشرة إلى الجولة التالية (الليل)
     checkWinCondition(roomId);
 
-    if (room.phase !== PHASES.GAME_OVER) {
+    if (rooms[roomId] && rooms[roomId].phase !== PHASES.GAME_OVER) {
       setTimeout(() => {
-        startNightCycle(roomId); // ينتقل مباشرة للّيل
-      }, 5000); // مهلة 5 ثواني لقراءة الرسالة
+        startNightCycle(roomId);
+      }, 4000);
     }
   });
 
+  // **قائمة الآدمن**: طرد لاعب نهائياً من الغرفة
+  socket.on('admin_kick_player', ({ roomId, targetId }) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    // تأكد من صلاحية الهوست
+    const sender = room.players.find(p => p.socketId === socket.id);
+    if (!sender || sender.id !== room.hostId) return;
+
+    const pIndex = room.players.findIndex(p => p.id === targetId);
+    if (pIndex !== -1) {
+      const removedName = room.players[pIndex].name;
+
+      // إخبار اللاعب المطرود
+      io.to(room.players[pIndex].socketId).emit('force_disconnect');
+
+      // حذفه من القائمة
+      room.players.splice(pIndex, 1);
+
+      io.to(roomId).emit('update_players', room.players);
+      io.to(roomId).emit('game_message', `قام الهوست بطرد ${removedName} من الغرفة.`);
+    }
+  });
 
   function checkWinCondition(roomId) {
     const room = rooms[roomId];
+    if (!room) return;
+
     const mafiaAlive = room.players.filter(p => p.isAlive && p.role === 'MAFIA').length;
     const citizensAlive = room.players.filter(p => p.isAlive && p.role !== 'MAFIA').length;
 
@@ -340,7 +343,7 @@ io.on('connection', (socket) => {
   }
 
   socket.on('disconnect', () => {
-    console.log('User Disconnected', socket.id);
+    console.log('User Disconnected (Session Kept)', socket.id);
   });
 });
 
