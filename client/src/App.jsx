@@ -3,8 +3,7 @@ import io from 'socket.io-client';
 import { Howl } from 'howler';
 import { v4 as uuidv4 } from 'uuid';
 
-// هذا رابط السيرفر حقك الي كان موجود في كودك القديم
-const SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
+const SERVER_URL = 'http://localhost:3001';
 
 const socket = io(SERVER_URL);
 
