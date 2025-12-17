@@ -5,12 +5,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 
 // === CONFIG ===
-// غير الرابط هنا إذا رفعت الموقع، حالياً خليه localhost للتجربة
+// تأكد من أن الرابط هو لوكال هوست اذا كنت تجرب على جهازك
 const SERVER_URL = 'http://localhost:3001';
 
 const socket = io(SERVER_URL, {
   transports: ['websocket', 'polling'],
-  withCredentials: true
+  withCredentials: true,
+  autoConnect: true,
 });
 
 // === CONSTANTS ===
@@ -52,43 +53,40 @@ export default function App() {
   const [msg, setMsg] = useState('');
   const [investigationResult, setInvestigationResult] = useState(null);
   const [showAdminMenu, setShowAdminMenu] = useState(false);
+  const [isConnected, setIsConnected] = useState(socket.connected);
 
   // === DERIVED ===
-  // Robust Match: ID -> Socket -> Name
   const myPlayer = players.find(p => p.id === playerId) ||
     players.find(p => p.socketId === socket.id) ||
     players.find(p => p.name === name);
 
   // === EFFECTS ===
   useEffect(() => {
+    // مراقبة الاتصال
+    socket.on('connect', () => setIsConnected(true));
+    socket.on('disconnect', () => setIsConnected(false));
+
     const savedRoom = localStorage.getItem('mafia_savedRoom');
-    if (savedRoom && playerId && name) {
+    if (savedRoom && playerId && name && socket.connected) {
       setRoomId(savedRoom);
       socket.emit('reconnect_user', { roomId: savedRoom, playerId, playerName: name });
     }
 
     socket.on('room_joined', ({ roomId, players, phase }) => {
+      console.log("Joined Room:", roomId);
       setRoomId(roomId);
-      setPlayers(players);
+      setPlayers([...players]); // إنشاء مصفوفة جديدة لفرض التحديث
       setPhase(phase);
       setView(phase === 'LOBBY' ? 'LOBBY' : 'GAME');
       localStorage.setItem('mafia_savedRoom', roomId);
     });
 
-    // Legacy Support 
-    socket.on('joined_room', (id) => {
-      setRoomId(id);
-      setView('LOBBY');
-      localStorage.setItem('mafia_savedRoom', id);
-    });
-    socket.on('room_created', (id) => {
-      setRoomId(id);
-      setView('LOBBY');
-      localStorage.setItem('mafia_savedRoom', id);
+    socket.on('update_players', (list) => {
+      console.log("Updating Players List:", list);
+      setPlayers([...list]); // مهم جداً لرؤية الأعضاء الجدد
     });
 
-    socket.on('update_players', (list) => setPlayers(list));
-    socket.on('game_started', (list) => { setPlayers(list); setView('GAME'); });
+    socket.on('game_started', (list) => { setPlayers([...list]); setView('GAME'); });
     socket.on('phase_change', (p) => { setPhase(p); setInvestigationResult(null); });
     socket.on('game_message', (t) => { setMsg(t); setTimeout(() => setMsg(''), 4000); });
 
@@ -109,7 +107,6 @@ export default function App() {
     socket.on('game_over', w => { setPhase('GAME_OVER'); setMsg(`الفائز: ${w}`); });
 
     socket.on('error', err => {
-      // alert(err); // Optional: suppress alerts if noisy
       console.error(err);
       if (err.includes('not found')) {
         setView('LOGIN');
@@ -123,19 +120,26 @@ export default function App() {
       localStorage.removeItem('mafia_savedRoom');
     });
 
-    return () => socket.off();
+    return () => {
+      socket.off();
+    };
   }, [playerId, name]);
 
   // === ACTIONS ===
   const createRoom = () => {
     if (!name) return alert('أدخل الاسم');
+    if (!socket.connected) return alert('جار الاتصال بالسيرفر... حاول مرة أخرى بعد ثانية');
+
     localStorage.setItem('mafia_playerName', name);
+    console.log("Creating room for:", name);
     socket.emit('create_room', { playerName: name, playerId });
   };
 
   const joinRoom = () => {
     if (!name || !roomId) return alert('أدخل البيانات');
-    const code = roomId.toUpperCase(); // Force Uppercase
+    if (!socket.connected) return alert('لا يوجد اتصال بالسيرفر');
+
+    const code = roomId.toUpperCase().trim(); // تنظيف الكود
     localStorage.setItem('mafia_playerName', name);
     socket.emit('join_room', { roomId: code, playerName: name, playerId });
   };
@@ -144,7 +148,6 @@ export default function App() {
 
   const handleAction = (targetId) => {
     if (myPlayer?.isAlive) {
-      console.log(`Sending Action: USE on ${targetId}`);
       socket.emit('player_action', { roomId, action: 'USE', targetId });
     }
   };
@@ -178,6 +181,11 @@ export default function App() {
           </h1>
           <p className="text-slate-400 mb-8 tracking-[0.3em] font-light">MAFIA ONLINE</p>
 
+          {/* مؤشر الاتصال */}
+          <div className={`mb-4 text-xs font-bold ${isConnected ? 'text-green-500' : 'text-red-500'}`}>
+            {isConnected ? '● متصل بالسيرفر' : '○ غير متصل (تحقق من تشغيل السيرفر)'}
+          </div>
+
           <input
             className="w-full bg-slate-900/80 text-white text-center p-4 rounded-xl mb-4 text-xl border border-slate-700 focus:border-purple-500 focus:outline-none transition-all placeholder:text-slate-600"
             placeholder="اسمك المستعار"
@@ -187,7 +195,8 @@ export default function App() {
 
           <button
             onClick={createRoom}
-            className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-bold text-lg hover:brightness-110 active:scale-95 transition-all shadow-lg mb-4"
+            disabled={!isConnected}
+            className={`w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-bold text-lg hover:brightness-110 active:scale-95 transition-all shadow-lg mb-4 ${!isConnected ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             إنشاء غرفة 🧱
           </button>
@@ -201,7 +210,8 @@ export default function App() {
             />
             <button
               onClick={joinRoom}
-              className="px-8 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-bold transition-all"
+              disabled={!isConnected}
+              className={`px-8 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-bold transition-all ${!isConnected ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               دخول
             </button>
@@ -242,6 +252,8 @@ export default function App() {
             <span className="text-slate-400 ml-4">رمز الغرفة:</span>
             <span className="text-5xl font-mono text-purple-400 font-bold tracking-widest">{roomId}</span>
           </div>
+
+          <h3 className="text-slate-400 mb-6">اللاعبون المتواجدون ({players.length})</h3>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-12">
             {players.map(p => (
@@ -290,7 +302,6 @@ export default function App() {
                 key={p.id}
                 onClick={() => {
                   if (isMyTurn && p.isAlive) handleAction(p.id);
-                  // Host kick is now via explicit button only
                 }}
                 className={`
                                   relative bg-slate-800 p-6 rounded-2xl flex flex-col items-center border-2 transition-all cursor-pointer
@@ -305,7 +316,7 @@ export default function App() {
                 {/* STATUS BADGES */}
                 {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center"><span className="text-red-600 font-black text-4xl -rotate-12 border-4 border-red-600 rounded-xl px-2 opacity-80">ميت</span></div>}
 
-                {/* HOST KICK BUTTON (VOTE EXECUTION) */}
+                {/* HOST KICK BUTTON */}
                 {isHostDay && p.isAlive && p.id !== myPlayer?.id && (
                   <button
                     onClick={(e) => {
