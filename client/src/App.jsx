@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 // === CONFIG ===
 // تأكد من أن الرابط هو لوكال هوست اذا كنت تجرب على جهازك
 // هذا رابط السيرفر حقك الي كان موجود في كودك القديم
+// هذا مثال، حط رابطك الحقيقي من Render
 const SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
 
 const socket = io(SERVER_URL, {
