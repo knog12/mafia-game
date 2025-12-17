@@ -55,6 +55,7 @@ export default function App() {
   const [investigationResult, setInvestigationResult] = useState(null);
   const [showAdminMenu, setShowAdminMenu] = useState(false);
   const [isConnected, setIsConnected] = useState(socket.connected);
+  const [isCreating, setIsCreating] = useState(false);
 
   // === DERIVED ===
   const myPlayer = players.find(p => p.id === playerId) ||
@@ -75,6 +76,7 @@ export default function App() {
 
     socket.on('room_joined', ({ roomId, players, phase }) => {
       console.log("Joined Room:", roomId);
+      setIsCreating(false); // Stop loading
       setRoomId(roomId);
       setPlayers([...players]); // إنشاء مصفوفة جديدة لفرض التحديث
       setPhase(phase);
@@ -109,10 +111,12 @@ export default function App() {
 
     socket.on('error', err => {
       console.error(err);
+      setIsCreating(false); // Stop loading on error
       if (err.includes('not found')) {
         setView('LOGIN');
         localStorage.removeItem('mafia_savedRoom');
       }
+      alert(`خطأ: ${err}`); // Show explicit error
     });
 
     socket.on('force_disconnect', () => {
@@ -131,9 +135,21 @@ export default function App() {
     if (!name) return alert('أدخل الاسم');
     if (!socket.connected) return alert('جار الاتصال بالسيرفر... حاول مرة أخرى بعد ثانية');
 
+    setIsCreating(true); // Start loading
     localStorage.setItem('mafia_playerName', name);
     console.log("Creating room for:", name);
     socket.emit('create_room', { playerName: name, playerId });
+
+    // Safety timeout
+    setTimeout(() => {
+      setIsCreating(c => {
+        if (c) {
+          alert('لم يتم استجابة السيرفر... تحقق من الاتصال');
+          return false;
+        }
+        return c;
+      });
+    }, 5000);
   };
 
   const joinRoom = () => {
@@ -196,10 +212,10 @@ export default function App() {
 
           <button
             onClick={createRoom}
-            disabled={!isConnected}
-            className={`w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-bold text-lg hover:brightness-110 active:scale-95 transition-all shadow-lg mb-4 ${!isConnected ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={!isConnected || isCreating}
+            className={`w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-bold text-lg hover:brightness-110 active:scale-95 transition-all shadow-lg mb-4 ${(!isConnected || isCreating) ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            إنشاء غرفة 🧱
+            {isCreating ? 'جاري الإنشاء...' : 'إنشاء غرفة 🧱'}
           </button>
 
           <div className="flex gap-2">

@@ -10,9 +10,9 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // أو رابط الفرونت إند الخاص بك
+    origin: "*",
     methods: ["GET", "POST"],
-    credentials: true
+    credentials: false // Correct fix for origin: "*"
   }
 });
 
