@@ -4,9 +4,8 @@ import { Howl } from 'howler';
 import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 
-// === CONFIG ===
-// تأكد من أن الرابط هو لوكال هوست اذا كنت تجرب على جهازك
-const SERVER_URL = 'http://localhost:3001';
+
+const SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
 
 const socket = io(SERVER_URL, {
   transports: ['websocket', 'polling'],
