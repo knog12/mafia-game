@@ -289,12 +289,12 @@ export default function App() {
                 key={p.id}
                 onClick={() => {
                   if (isMyTurn && p.isAlive) handleAction(p.id);
-                  if (isHostDay && p.isAlive) hostAction('KICK', p.id);
+                  // Host kick is now via explicit button only
                 }}
                 className={`
                                   relative bg-slate-800 p-6 rounded-2xl flex flex-col items-center border-2 transition-all cursor-pointer
                                   ${!p.isAlive ? 'border-red-900 bg-red-950/20 opacity-50 grayscale' : 'border-slate-700'}
-                                  ${(isMyTurn || isHostDay) && p.isAlive && p.id !== myPlayer?.id ? 'hover:border-purple-500 hover:shadow-[0_0_20px_rgba(168,85,247,0.4)] hover:scale-105' : ''}
+                                  ${isMyTurn && p.isAlive && p.id !== myPlayer?.id ? 'hover:border-purple-500 hover:shadow-[0_0_20px_rgba(168,85,247,0.4)] hover:scale-105' : ''}
                                   ${myPlayer?.id === p.id ? 'ring-2 ring-purple-500 ring-offset-2 ring-offset-slate-900' : ''}
                               `}
               >
@@ -303,19 +303,40 @@ export default function App() {
 
                 {/* STATUS BADGES */}
                 {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center"><span className="text-red-600 font-black text-4xl -rotate-12 border-4 border-red-600 rounded-xl px-2 opacity-80">ميت</span></div>}
-                {isHostDay && p.isAlive && <div className="absolute top-2 right-2 text-red-500 animate-pulse text-xl">🎯</div>}
+
+                {/* HOST KICK BUTTON */}
+                {isHostDay && p.isAlive && p.id !== myPlayer?.id && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm(`هل أنت متأكد من طرد ${p.name}؟`)) {
+                        hostAction('KICK', p.id);
+                      }
+                    }}
+                    className="absolute -top-3 -right-3 bg-red-600 text-white w-10 h-10 rounded-full font-bold shadow-lg hover:bg-red-500 hover:scale-110 flex items-center justify-center z-10 border-2 border-slate-900"
+                    title="طرد هذا اللاعب"
+                  >
+                    🔪
+                  </button>
+                )}
               </motion.div>
             ))}
           </div>
 
           {/* HOST CONTROLS */}
           {isHostDay && (
-            <div className="fixed top-28 left-1/2 -translate-x-1/2 z-50 flex gap-4">
-              <div className="bg-slate-800/90 backdrop-blur p-3 rounded-xl border border-red-500/30 flex items-center gap-4 shadow-2xl">
-                <span className="text-red-400 font-bold border-l border-slate-600 pl-3">تحكم الهوست</span>
-                <span className="text-slate-400 text-sm">اضغط على لاعب لطرده أو تخطى</span>
-                <button onClick={() => hostAction('SKIP')} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg font-bold shadow-lg">
-                  تخطي الليلة ⏭️
+            <div className="fixed top-28 left-1/2 -translate-x-1/2 z-50 flex gap-4 w-full justify-center px-4">
+              <div className="bg-slate-800/90 backdrop-blur p-4 rounded-2xl border border-red-500/30 flex items-center gap-6 shadow-2xl">
+                <div className="flex flex-col">
+                  <span className="text-red-400 font-bold text-lg">تحكم الهوست 👑</span>
+                  <span className="text-slate-400 text-xs">اختر لاعب للقتل أو اضغط سكب</span>
+                </div>
+                <div className="h-10 w-px bg-slate-600"></div>
+                <button
+                  onClick={() => hostAction('SKIP')}
+                  className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white px-8 py-3 rounded-xl font-bold shadow-lg text-lg transition-transform active:scale-95"
+                >
+                  سكب (تخطي) ⏭️
                 </button>
               </div>
             </div>

@@ -243,28 +243,40 @@ io.on('connection', (socket) => {
 
   // HOST DAY ACTIONS
   socket.on('host_action_day', ({ roomId, action, targetId }) => {
+    console.log(`Host Action: ${action} in room ${roomId}`);
     const room = rooms[roomId];
     if (!room) return;
     const sender = room.players.find(p => p.socketId === socket.id);
-    if (!sender || !sender.isHost) return;
+    if (!sender || !sender.isHost) {
+      console.log('Action denied: Not host or player not found');
+      return;
+    }
 
-    if (room.phase !== PHASES.DAY_DISCUSSION) return;
+    if (room.phase !== PHASES.DAY_DISCUSSION) {
+      console.log('Action denied: Wrong phase', room.phase);
+      return;
+    }
 
     if (action === 'SKIP') {
-      io.to(roomId).emit('game_message', 'تم تخطي اليوم ⏭️');
+      console.log('Skipping day...');
+      io.to(roomId).emit('game_message', 'تم تخطي اليوم ⏭️ - المدينة تنام...');
       setTimeout(() => startNightCycle(roomId), 1000);
     }
     else if (action === 'KICK' && targetId) {
       const victim = room.players.find(p => p.id === targetId);
       if (victim) {
+        console.log(`Kicking player: ${victim.name}`);
         victim.isAlive = false;
-        io.to(roomId).emit('game_message', `تم إعدام ${victim.name} ⚖️`);
-        io.to(roomId).emit('update_players', room.players);
+        io.to(roomId).emit('game_message', `تم إعدام ${victim.name} ⚖️ - المدينة تنام...`);
+        io.to(roomId).emit('update_players', room.players); // Update UI immediately
 
         const gameOver = checkWinCondition(roomId);
         if (!gameOver) {
+          // Play sleep sound immediately implies night start, but we usually delay slightly for the message to be read
           setTimeout(() => startNightCycle(roomId), 3000);
         }
+      } else {
+        console.log('Target not found for kick');
       }
     }
   });
