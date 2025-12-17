@@ -21,12 +21,12 @@ const rooms = {};
 
 const PHASES = {
   LOBBY: 'LOBBY',
-  NIGHT_SLEEP: 'NIGHT_SLEEP',
+  NIGHT_SLEEP: 'NIGHT_SLEEP',   // وقت تشغيل صوتية النوم
   NIGHT_MAFIA: 'NIGHT_MAFIA',
   NIGHT_NURSE: 'NIGHT_NURSE',
   NIGHT_DETECTIVE: 'NIGHT_DETECTIVE',
-  DAY_WAKE: 'DAY_WAKE',
-  DAY_DISCUSSION: 'DAY_DISCUSSION',
+  DAY_WAKE: 'DAY_WAKE',         // وقت عرض نتائج الليل
+  DAY_DISCUSSION: 'DAY_DISCUSSION', // وقت النقاش وازرار الهوست
   GAME_OVER: 'GAME_OVER'
 };
 
@@ -158,58 +158,67 @@ io.on('connection', (socket) => {
     startNightCycle(roomId);
   });
 
-  // NIGHT CYCLE
+  // === NIGHT CYCLE LOGIC ===
   function startNightCycle(roomId) {
     const room = rooms[roomId];
     if (!room) return;
 
+    // تصفية اختيارات الليلة السابقة
     room.mafiaTarget = null;
     room.nurseTarget = null;
     room.detectiveCheck = null;
 
+    // 1. مرحلة النوم وتشغيل الصوتية (Everyone Sleep)
     updatePhase(roomId, PHASES.NIGHT_SLEEP);
     io.to(roomId).emit('play_audio', 'everyone_sleep');
 
+    // 2. الانتقال لدور المافيا بعد انتهاء الصوتية (4.5 ثواني)
     setTimeout(() => {
       updatePhase(roomId, PHASES.NIGHT_MAFIA);
       io.to(roomId).emit('play_audio', 'mafia_wake');
     }, 4500);
   }
 
-  // PLAYER ACTIONS
+  // === PLAYER ACTIONS (NIGHT) ===
   socket.on('player_action', ({ roomId, action, targetId }) => {
     const room = rooms[roomId];
     if (!room) return;
     const player = room.players.find(p => p.socketId === socket.id);
     if (!player || !player.isAlive) return;
 
+    // --- MAFIA ACTION ---
     if (room.phase === PHASES.NIGHT_MAFIA && player.role === 'MAFIA') {
       room.mafiaTarget = targetId;
+      // ننتظر قليلاً ثم ننتقل للممرضة
       setTimeout(() => {
         updatePhase(roomId, PHASES.NIGHT_NURSE);
         io.to(roomId).emit('play_audio', 'nurse_wake');
       }, 2000);
     }
+    // --- DOCTOR ACTION ---
     else if (room.phase === PHASES.NIGHT_NURSE && player.role === 'DOCTOR') {
       if (targetId === player.id && player.hasSelfHealed) return socket.emit('error', 'لا يمكنك معالجة نفسك مرة أخرى');
       if (targetId === player.id) player.hasSelfHealed = true;
 
       room.nurseTarget = targetId;
+      // ننتظر قليلاً ثم ننتقل للشايب
       setTimeout(() => {
         updatePhase(roomId, PHASES.NIGHT_DETECTIVE);
         io.to(roomId).emit('play_audio', 'detective_wake');
       }, 2000);
     }
+    // --- DETECTIVE ACTION ---
     else if (room.phase === PHASES.NIGHT_DETECTIVE && player.role === 'DETECTIVE') {
       const target = room.players.find(p => p.id === targetId);
       const res = (target && target.role === 'MAFIA') ? 'MAFIA 😈' : 'CITIZEN 😇';
       socket.emit('investigation_result', res);
 
+      // بعد ظهور النتيجة للشايب، نحسب نتائج الليل
       setTimeout(() => calculateResults(roomId), 3000);
     }
   });
 
-  // CALCULATE RESULTS
+  // === CALCULATE RESULTS (END OF NIGHT) ===
   function calculateResults(roomId) {
     const room = rooms[roomId];
     if (!room) return;
@@ -217,7 +226,7 @@ io.on('connection', (socket) => {
     updatePhase(roomId, PHASES.DAY_WAKE);
     io.to(roomId).emit('play_audio', 'everyone_wake');
 
-    // 4.5 Seconds Delay before Result Sound
+    // بعد 4.5 ثواني من الاستيقاظ، نعرض من مات
     setTimeout(() => {
       let msg = "صباح الخير! لم يمت أحد الليلة ✨";
       let audio = "result_fail";
@@ -231,77 +240,104 @@ io.on('connection', (socket) => {
         }
       }
 
+      // إرسال النتيجة وتشغيل الصوتية
       io.to(roomId).emit('day_result', { msg, players: room.players });
       io.to(roomId).emit('play_audio', audio);
 
+      // التحقق من الفوز
       const gameOver = checkWinCondition(roomId);
       if (!gameOver) {
-        setTimeout(() => updatePhase(roomId, PHASES.DAY_DISCUSSION), 5000);
+        // ننتقل لمرحلة النقاش (حيث تظهر أزرار الهوست) بعد 5 ثواني من عرض النتيجة
+        setTimeout(() => {
+          updatePhase(roomId, PHASES.DAY_DISCUSSION);
+        }, 5000);
       }
     }, 4500);
   }
 
-  // HOST DAY ACTIONS
+  // === HOST DAY ACTIONS (KICK / SKIP) ===
   socket.on('host_action_day', ({ roomId, action, targetId }) => {
     console.log(`Host Action: ${action} in room ${roomId}`);
     const room = rooms[roomId];
     if (!room) return;
+
+    // التأكد أن المرسل هو الهوست
     const sender = room.players.find(p => p.socketId === socket.id);
     if (!sender || !sender.isHost) {
-      console.log('Action denied: Not host or player not found');
+      console.log('Action denied: Not host');
       return;
     }
 
+    // السماح للهوست بالتحكم فقط في مرحلة النقاش
+    // (تم التعديل لضمان استجابة الأزرار)
     if (room.phase !== PHASES.DAY_DISCUSSION) {
-      console.log('Action denied: Wrong phase', room.phase);
+      console.log(`Action Ignored: Wrong Phase ${room.phase}`);
       return;
     }
 
+    // 1. خيار التخطي (SKIP) - الانتقال للجولة التالية
     if (action === 'SKIP') {
-      console.log('Skipping day...');
-      io.to(roomId).emit('game_message', 'تم تخطي اليوم ⏭️ - المدينة تنام...');
-      setTimeout(() => startNightCycle(roomId), 1000);
+      console.log('Skipping day -> Starting Night Cycle');
+      io.to(roomId).emit('game_message', 'الليل قادم... 🌑');
+      // البدء فوراً في دورة الليل (صوتية الجميع ينام)
+      startNightCycle(roomId);
     }
+    // 2. خيار الإعدام (KICK) من الجولة (تصويت)
     else if (action === 'KICK' && targetId) {
       const victim = room.players.find(p => p.id === targetId);
       if (victim) {
-        console.log(`Kicking player: ${victim.name}`);
-        victim.isAlive = false;
-        io.to(roomId).emit('game_message', `تم إعدام ${victim.name} ⚖️ - المدينة تنام...`);
-        io.to(roomId).emit('update_players', room.players); // Update UI immediately
+        console.log(`Voting execution: ${victim.name}`);
+        victim.isAlive = false; // قتل اللاعب
 
+        io.to(roomId).emit('game_message', `تم إعدام ${victim.name} بتصويت المدينة ⚖️`);
+        io.to(roomId).emit('update_players', room.players); // تحديث الواجهة فوراً
+
+        // التحقق من الفوز قبل الانتقال لليل
         const gameOver = checkWinCondition(roomId);
         if (!gameOver) {
-          // Play sleep sound immediately implies night start, but we usually delay slightly for the message to be read
-          setTimeout(() => startNightCycle(roomId), 3000);
+          // إذا لم تنته اللعبة، ننتقل لليل بعد ثانية واحدة
+          setTimeout(() => startNightCycle(roomId), 1500);
         }
-      } else {
-        console.log('Target not found for kick');
       }
     }
   });
 
-  // ADMIN KICK (ANYTIME)
+  // === ADMIN KICK (طرد اللاعب من الغرفة نهائياً) ===
+  // هذا الزر يجب أن يكون متاحاً للهوست في بطاقة كل لاعب
   socket.on('admin_kick_player', ({ roomId, targetId }) => {
     const room = rooms[roomId];
     if (!room) return;
+
     const sender = room.players.find(p => p.socketId === socket.id);
     if (!sender || !sender.isHost) return;
 
     const idx = room.players.findIndex(p => p.id === targetId);
     if (idx !== -1) {
-      const removed = room.players[idx];
-      io.to(removed.socketId).emit('force_disconnect');
+      const removedPlayer = room.players[idx];
+
+      console.log(`Admin Kicking player from room: ${removedPlayer.name}`);
+
+      // 1. إجبار اللاعب المطرود على الخروج
+      if (removedPlayer.socketId) {
+        io.to(removedPlayer.socketId).emit('force_disconnect');
+        // ملاحظة: يجب التعامل مع هذا الحدث في الفرونت إند لإعادته للصفحة الرئيسية
+      }
+
+      // 2. حذفه من القائمة
       room.players.splice(idx, 1);
+
+      // 3. تحديث باقي اللاعبين
       io.to(roomId).emit('update_players', room.players);
-      io.to(roomId).emit('game_message', `تم طرد ${removed.name} 🚫`);
+      io.to(roomId).emit('game_message', `تم طرد ${removedPlayer.name} من الغرفة 🚫`);
     }
   });
 
+  // === HELPER FUNCTIONS ===
   function updatePhase(roomId, phase) {
     if (rooms[roomId]) {
       rooms[roomId].phase = phase;
       io.to(roomId).emit('phase_change', phase);
+      console.log(`Room ${roomId} Phase: ${phase}`);
     }
   }
 

@@ -5,8 +5,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 
 // === CONFIG ===
-// === CONFIG ===
-const SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
+// غير الرابط هنا إذا رفعت الموقع، حالياً خليه localhost للتجربة
+const SERVER_URL = 'http://localhost:3001';
+
 const socket = io(SERVER_URL, {
   transports: ['websocket', 'polling'],
   withCredentials: true
@@ -304,7 +305,7 @@ export default function App() {
                 {/* STATUS BADGES */}
                 {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center"><span className="text-red-600 font-black text-4xl -rotate-12 border-4 border-red-600 rounded-xl px-2 opacity-80">ميت</span></div>}
 
-                {/* HOST KICK BUTTON */}
+                {/* HOST KICK BUTTON (VOTE EXECUTION) */}
                 {isHostDay && p.isAlive && p.id !== myPlayer?.id && (
                   <button
                     onClick={(e) => {
