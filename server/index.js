@@ -10,10 +10,14 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: ["https://mafia-game-dpfv.onrender.com", "https://*.vercel.app", "http://localhost:5173", "http://localhost:3000"],
     methods: ["GET", "POST"],
-    credentials: false // Correct fix for origin: "*"
-  }
+    credentials: true
+  },
+  transports: ['websocket', 'polling'], // Allow both transports
+  allowEIO3: true, // Ensure compatibility
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 // === STATE ===
@@ -34,7 +38,7 @@ const AVATARS = ['👨', '👩', '🕵️', '🤠', '🧙', '🧛', '🤖', '�
 
 // === SOCKET ===
 io.on('connection', (socket) => {
-  console.log('User Connected:', socket.id);
+  console.log('✅ User Connected:', socket.id, '| Transport:', socket.conn.transport.name);
 
   // 1. CREATE ROOM
   socket.on('create_room', ({ playerName, playerId }) => {

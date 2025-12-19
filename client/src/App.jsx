@@ -5,13 +5,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 
 // === CONFIG ===
-// تم تثبيت الرابط المباشر وإلغاء أي روابط قديمة لضمان الاتصال بـ Render
-const SERVER_URL = 'https://mafia-game-dpfv.onrender.com';
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
 const socket = io(SERVER_URL, {
-  transports: ['websocket'], // فرض استخدام websocket لسرعة الاستجابة
+  transports: ['polling', 'websocket'], // Try polling first, then upgrade to websocket
   reconnection: true,
-  reconnectionAttempts: 10,
-  timeout: 30000,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 1000,
+  timeout: 60000, // 60 seconds for Render cold start
 });
 
 // === CONSTANTS ===
@@ -118,12 +118,12 @@ export default function App() {
           <h1 className="text-7xl font-black mb-2 text-white drop-shadow-xl">الحوش</h1>
           <p className="text-lime-100 mb-8 font-bold opacity-90 uppercase tracking-widest">MAFIA ONLINE</p>
           <input className="w-full bg-black/30 text-white text-center p-4 rounded-xl mb-4 text-xl placeholder-white/70 font-bold border-none outline-none focus:ring-2 focus:ring-white" placeholder="اسمك المستعار" value={name} onChange={e => setName(e.target.value)} />
-          <button onClick={handleCreate} disabled={isCreating} className="w-full py-4 bg-lime-600 hover:bg-lime-700 text-white rounded-xl font-bold text-lg shadow-lg mb-4 border-b-4 border-lime-800 transition-all active:scale-95">{isCreating ? 'جاري الاتصال بالسيرفر...' : 'إنشاء غرفة جديدة 🎮'}</button>
+          <button onClick={handleCreate} disabled={isCreating} className="w-full py-4 bg-lime-600 hover:bg-lime-700 text-white rounded-xl font-bold text-lg shadow-lg mb-4 border-b-4 border-lime-800 transition-all active:scale-95">{isCreating ? '...جاري الاتصال بالسيرفر' : 'إنشاء غرفة جديدة 🎮'}</button>
           <div className="flex gap-2">
             <input className="flex-1 bg-black/30 text-white text-center p-4 rounded-xl placeholder-white/70 font-mono text-lg uppercase" placeholder="CODE" value={roomId} onChange={e => setRoomId(e.target.value)} />
             <button onClick={handleJoin} className="bg-sky-600 hover:bg-sky-700 text-white px-6 rounded-xl font-bold shadow-lg border-b-4 border-sky-800 active:scale-95 transition-all">دخول</button>
           </div>
-          <p className="mt-8 text-lime-900 font-bold opacity-60 text-xs">ملاحظة: إذا كان السيرفر نائمًا قد يستغرق الاتصال 30 ثانية</p>
+          <p className="mt-8 text-lime-900 font-bold opacity-60 text-xs">ملاحظة: قد يستغرق الاتصال بالسيرفر حتى 60 ثانية عند أول اتصال</p>
         </div>
       </div>
     );
