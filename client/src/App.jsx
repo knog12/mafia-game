@@ -86,11 +86,14 @@ export default function App() {
   // Exactly like Al-Hosh pattern
   const createGame = () => {
     if (!name) return alert('الرجاء كتابة الاسم');
+    console.log('📤 Sending create_room request with name:', name);
     socket.emit('create_room', { hostName: name }, (res) => {
+      console.log('📥 Received create_room response:', res);
       if (res.error) return alert(res.error);
       setRoomId(res.roomCode);
       setRole('host');
       setView('game');
+      console.log('✅ Room created successfully, roomCode:', res.roomCode);
     });
   };
 

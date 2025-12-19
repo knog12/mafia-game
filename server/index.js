@@ -10,7 +10,7 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ["https://mafia-game-dpfv.onrender.com", "https://*.vercel.app", "http://localhost:5173", "http://localhost:3000"],
+    origin: ["https://mafia-game-phi.vercel.app", "http://localhost:5173", "http://localhost:3000"],
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -42,6 +42,7 @@ io.on('connection', (socket) => {
 
   // 1. CREATE ROOM - matching Al-Hosh pattern
   socket.on('create_room', ({ hostName }, callback) => {
+    console.log('📥 Received create_room request from:', hostName);
     const roomCode = uuidv4().substring(0, 4).toUpperCase();
 
     const hostPlayer = {
@@ -69,12 +70,13 @@ io.on('connection', (socket) => {
     socket.join(roomCode);
 
     // Send callback response immediately - like Al-Hosh
+    console.log('📤 Sending callback with roomCode:', roomCode);
     if (callback) callback({ roomCode });
 
     // Update all players in room - like Al-Hosh
     io.to(roomCode).emit('player_joined', { players: rooms[roomCode].players });
 
-    console.log(`Room ${roomCode} created by ${hostName}`);
+    console.log(`✅ Room ${roomCode} created by ${hostName}`);
   });
 
   // 2. JOIN ROOM - matching Al-Hosh pattern
