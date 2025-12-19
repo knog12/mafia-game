@@ -6,6 +6,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 // === CONFIG ===
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+console.log('🔌 Connecting to server:', SERVER_URL);
+
 const socket = io(SERVER_URL, {
   transports: ['polling', 'websocket'], // Try polling first, then upgrade to websocket
   reconnection: true,
@@ -13,6 +15,12 @@ const socket = io(SERVER_URL, {
   reconnectionDelay: 1000,
   timeout: 60000, // 60 seconds for Render cold start
 });
+
+// Connection status logging
+socket.on('connect', () => console.log('✅ Socket connected:', socket.id));
+socket.on('disconnect', () => console.log('❌ Socket disconnected'));
+socket.on('connect_error', (err) => console.error('🚨 Connection error:', err.message));
+socket.on('connect_timeout', () => console.error('⏱️ Connection timeout'));
 
 // === CONSTANTS ===
 const ROLES_AR = {
@@ -53,11 +61,27 @@ export default function App() {
   const [investigationResult, setInvestigationResult] = useState(null);
   const [showAdminMenu, setShowAdminMenu] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
 
   const myPlayer = players.find(p => p.id === playerId) ||
     players.find(p => p.name === name);
 
   useEffect(() => {
+    // Track connection status
+    socket.on('connect', () => {
+      console.log('✅ Connected to server');
+      setConnectionStatus('connected');
+    });
+    socket.on('disconnect', () => {
+      console.log('❌ Disconnected from server');
+      setConnectionStatus('disconnected');
+    });
+    socket.on('connect_error', (err) => {
+      console.error('🚨 Connection error:', err);
+      setConnectionStatus('error');
+      setIsCreating(false);
+    });
+
     const savedRoom = localStorage.getItem('mafia_savedRoom');
     if (savedRoom && playerId && name) {
       setRoomId(savedRoom);
@@ -65,6 +89,7 @@ export default function App() {
     }
 
     socket.on('room_joined', ({ roomId, players, phase }) => {
+      console.log('🎉 Room joined:', roomId);
       setIsCreating(false);
       setRoomId(roomId);
       setPlayers([...players]);
@@ -89,6 +114,21 @@ export default function App() {
 
   const handleCreate = () => {
     if (!name) return alert('أدخل الاسم');
+
+    // Check connection status
+    if (!socket.connected) {
+      alert('غير متصل بالسيرفر! جاري المحاولة...');
+      setIsCreating(true);
+      // Wait for connection
+      socket.once('connect', () => {
+        console.log('🔄 Reconnected, creating room...');
+        localStorage.setItem('mafia_playerName', name);
+        socket.emit('create_room', { playerName: name, playerId });
+      });
+      return;
+    }
+
+    console.log('📤 Sending create_room event...');
     setIsCreating(true);
     localStorage.setItem('mafia_playerName', name);
     socket.emit('create_room', { playerName: name, playerId });
@@ -118,7 +158,9 @@ export default function App() {
           <h1 className="text-7xl font-black mb-2 text-white drop-shadow-xl">الحوش</h1>
           <p className="text-lime-100 mb-8 font-bold opacity-90 uppercase tracking-widest">MAFIA ONLINE</p>
           <input className="w-full bg-black/30 text-white text-center p-4 rounded-xl mb-4 text-xl placeholder-white/70 font-bold border-none outline-none focus:ring-2 focus:ring-white" placeholder="اسمك المستعار" value={name} onChange={e => setName(e.target.value)} />
-          <button onClick={handleCreate} disabled={isCreating} className="w-full py-4 bg-lime-600 hover:bg-lime-700 text-white rounded-xl font-bold text-lg shadow-lg mb-4 border-b-4 border-lime-800 transition-all active:scale-95">{isCreating ? '...جاري الاتصال بالسيرفر' : 'إنشاء غرفة جديدة 🎮'}</button>
+          <button onClick={handleCreate} disabled={isCreating || connectionStatus === 'error'} className="w-full py-4 bg-lime-600 hover:bg-lime-700 text-white rounded-xl font-bold text-lg shadow-lg mb-4 border-b-4 border-lime-800 transition-all active:scale-95 disabled:opacity-50">
+            {connectionStatus === 'error' ? '❌ فشل الاتصال - تحقق من السيرفر' : isCreating ? '...جاري الاتصال بالسيرفر' : connectionStatus === 'connected' ? 'إنشاء غرفة جديدة 🎮' : '🔌 جاري الاتصال...'}
+          </button>
           <div className="flex gap-2">
             <input className="flex-1 bg-black/30 text-white text-center p-4 rounded-xl placeholder-white/70 font-mono text-lg uppercase" placeholder="CODE" value={roomId} onChange={e => setRoomId(e.target.value)} />
             <button onClick={handleJoin} className="bg-sky-600 hover:bg-sky-700 text-white px-6 rounded-xl font-bold shadow-lg border-b-4 border-sky-800 active:scale-95 transition-all">دخول</button>
