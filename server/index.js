@@ -40,19 +40,14 @@ const AVATARS = ['👨', '👩', '🕵️', '🤠', '🧙', '🧛', '🤖', '�
 io.on('connection', (socket) => {
   console.log('✅ User Connected:', socket.id, '| Transport:', socket.conn.transport.name);
 
-  // 1. CREATE ROOM
-  socket.on('create_room', ({ playerName, playerId }, callback) => {
-    if (!playerId) {
-      if (callback) callback({ error: 'No Player ID' });
-      return;
-    }
-
-    const roomId = uuidv4().substring(0, 4).toUpperCase();
+  // 1. CREATE ROOM - matching Al-Hosh pattern
+  socket.on('create_room', ({ hostName }, callback) => {
+    const roomCode = uuidv4().substring(0, 4).toUpperCase();
 
     const hostPlayer = {
-      id: playerId,
+      id: socket.id,
       socketId: socket.id,
-      name: playerName,
+      name: hostName,
       isHost: true,
       role: 'PENDING',
       isAlive: true,
@@ -60,9 +55,9 @@ io.on('connection', (socket) => {
       hasSelfHealed: false
     };
 
-    rooms[roomId] = {
-      id: roomId,
-      hostId: playerId,
+    rooms[roomCode] = {
+      id: roomCode,
+      hostId: socket.id,
       players: [hostPlayer],
       phase: PHASES.LOBBY,
       mafiaTarget: null,
@@ -71,77 +66,52 @@ io.on('connection', (socket) => {
       winner: null
     };
 
-    socket.join(roomId);
+    socket.join(roomCode);
 
-    // Send callback response immediately
-    if (callback) callback({ roomCode: roomId });
+    // Send callback response immediately - like Al-Hosh
+    if (callback) callback({ roomCode });
 
-    // Update all players in room
-    io.to(roomId).emit('update_players', rooms[roomId].players);
+    // Update all players in room - like Al-Hosh
+    io.to(roomCode).emit('player_joined', { players: rooms[roomCode].players });
 
-    console.log(`Room ${roomId} created by ${playerName}`);
+    console.log(`Room ${roomCode} created by ${hostName}`);
   });
 
-  // 2. JOIN / RECONNECT
-  socket.on('join_room', ({ roomId, playerName, playerId }, callback) => handleJoin(socket, roomId?.toUpperCase(), playerName, playerId, callback));
-  socket.on('reconnect_user', ({ roomId, playerName, playerId }) => handleJoin(socket, roomId?.toUpperCase(), playerName, playerId, null));
-
-  function handleJoin(socket, roomId, playerName, playerId, callback) {
-    const room = rooms[roomId];
+  // 2. JOIN ROOM - matching Al-Hosh pattern
+  socket.on('join_room', ({ roomCode, playerName }, callback) => {
+    const room = rooms[roomCode?.toUpperCase()];
     if (!room) {
       if (callback) callback({ error: 'الغرفة غير موجودة' });
-      else socket.emit('error', 'الغرفة غير موجودة');
-      return;
-    }
-    if (!playerId) {
-      if (callback) callback({ error: 'No Player ID' });
-      else socket.emit('error', 'No Player ID');
       return;
     }
 
-    let player = room.players.find(p => p.id === playerId);
-
-    if (!player && playerName) {
-      const matchByName = room.players.find(p => p.name === playerName);
-      if (matchByName) {
-        player = matchByName;
-        player.id = playerId;
-      }
+    if (room.phase !== PHASES.LOBBY) {
+      if (callback) callback({ error: 'اللعبة بدأت بالفعل' });
+      return;
     }
 
-    if (player) {
-      // Reconnection
-      player.socketId = socket.id;
-      if (playerName) player.name = playerName;
-      socket.join(roomId);
-      if (callback) callback({ success: true });
-    } else {
-      // New Player
-      if (room.phase !== PHASES.LOBBY) {
-        if (callback) callback({ error: 'اللعبة بدأت بالفعل' });
-        else socket.emit('error', 'اللعبة بدأت بالفعل');
-        return;
-      }
+    const newPlayer = {
+      id: socket.id,
+      socketId: socket.id,
+      name: playerName,
+      isHost: false,
+      role: 'PENDING',
+      isAlive: true,
+      avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
+      hasSelfHealed: false
+    };
 
-      const newPlayer = {
-        id: playerId,
-        socketId: socket.id,
-        name: playerName,
-        isHost: false,
-        role: 'PENDING',
-        isAlive: true,
-        avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
-        hasSelfHealed: false
-      };
+    room.players.push(newPlayer);
+    socket.join(roomCode.toUpperCase());
 
-      room.players.push(newPlayer);
-      socket.join(roomId);
-      if (callback) callback({ success: true });
-    }
+    // Send callback - like Al-Hosh
+    if (callback) callback({ success: true });
 
-    // *** تحديث القائمة لكل الموجودين في الغرفة (بما فيهم الهوست والجديد) ***
-    io.to(roomId).emit('player_joined', { players: room.players });
-  }
+    // Update all players - like Al-Hosh
+    io.to(roomCode.toUpperCase()).emit('player_joined', { players: room.players });
+
+    console.log(`${playerName} joined room ${roomCode}`);
+  });
 
   // 3. START GAME
   socket.on('start_game', ({ roomId }) => {

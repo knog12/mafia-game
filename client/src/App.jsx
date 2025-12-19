@@ -43,58 +43,31 @@ const sounds = {
 };
 
 export default function App() {
-  const [playerId] = useState(() => {
-    let stored = localStorage.getItem('mafia_playerId');
-    if (!stored) {
-      stored = uuidv4();
-      localStorage.setItem('mafia_playerId', stored);
-    }
-    return stored;
-  });
-
-  const [name, setName] = useState(() => localStorage.getItem('mafia_playerName') || '');
+  // Simplified state - matching Al-Hosh pattern
+  const [view, setView] = useState('lobby');
+  const [role, setRole] = useState(null);
   const [roomId, setRoomId] = useState('');
-  const [view, setView] = useState('LOGIN');
+  const [name, setName] = useState('');
   const [players, setPlayers] = useState([]);
   const [phase, setPhase] = useState('LOBBY');
   const [msg, setMsg] = useState('');
   const [investigationResult, setInvestigationResult] = useState(null);
   const [showAdminMenu, setShowAdminMenu] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState('connecting');
 
-  const myPlayer = players.find(p => p.id === playerId) ||
-    players.find(p => p.name === name);
+  const myPlayer = players.find(p => p.name === name);
 
   useEffect(() => {
-    // Track connection status
-    socket.on('connect', () => {
-      console.log('✅ Connected to server');
-      setConnectionStatus('connected');
-    });
-    socket.on('disconnect', () => {
-      console.log('❌ Disconnected from server');
-      setConnectionStatus('disconnected');
-    });
-    socket.on('connect_error', (err) => {
-      console.error('🚨 Connection error:', err);
-      setConnectionStatus('error');
-      setIsCreating(false);
-    });
-
-    socket.on('player_joined', (data) => {
-      setPlayers(data.players);
-      setView('LOBBY');
-    });
+    // Simple event listeners - matching Al-Hosh pattern
+    socket.on('player_joined', (data) => setPlayers(data.players));
     socket.on('update_players', (list) => setPlayers([...list]));
-    socket.on('game_started', (list) => { setPlayers([...list]); setView('GAME'); });
+    socket.on('game_started', (list) => { setPlayers([...list]); setView('game'); });
     socket.on('phase_change', (p) => { setPhase(p); setInvestigationResult(null); });
     socket.on('game_message', (t) => { setMsg(t); setTimeout(() => setMsg(''), 4000); });
     socket.on('play_audio', (key) => { if (sounds[key]) { Object.values(sounds).forEach(s => s.stop()); sounds[key].play(); } });
     socket.on('day_result', ({ msg, players }) => { setMsg(msg); setPlayers(players); setTimeout(() => setMsg(''), 6000); });
     socket.on('investigation_result', res => setInvestigationResult(res));
     socket.on('game_over', w => { setPhase('GAME_OVER'); setMsg(`انتهت اللعبة! الفائز: ${w === 'MAFIA' ? 'المافيا' : 'المواطنون'}`); });
-    socket.on('force_disconnect', () => { alert('تم طردك'); setView('LOGIN'); localStorage.removeItem('mafia_savedRoom'); });
+    socket.on('force_disconnect', () => { alert('تم طردك'); setView('lobby'); });
 
     return () => {
       socket.off('player_joined');
@@ -110,23 +83,23 @@ export default function App() {
     };
   }, []);
 
-  const handleCreate = () => {
-    if (!name) return alert('أدخل الاسم');
-    localStorage.setItem('mafia_playerName', name);
-    socket.emit('create_room', { playerName: name, playerId }, (res) => {
+  // Exactly like Al-Hosh pattern
+  const createGame = () => {
+    if (!name) return alert('الرجاء كتابة الاسم');
+    socket.emit('create_room', { hostName: name }, (res) => {
       if (res.error) return alert(res.error);
       setRoomId(res.roomCode);
-      setView('LOBBY');
+      setRole('host');
+      setView('game');
     });
   };
 
-  const handleJoin = () => {
-    if (!name || !roomId) return alert('أدخل البيانات');
-    localStorage.setItem('mafia_playerName', name);
-    socket.emit('join_room', { roomId: roomId.toUpperCase().trim(), playerName: name, playerId }, (res) => {
+  const joinGame = () => {
+    if (!name || !roomId) return alert('الرجاء كتابة الاسم وكود الغرفة');
+    socket.emit('join_room', { roomCode: roomId.toUpperCase(), playerName: name }, (res) => {
       if (res.error) return alert(res.error);
-      setRoomId(roomId.toUpperCase().trim());
-      setView('LOBBY');
+      setRole('player');
+      setView('game');
     });
   };
 
@@ -141,21 +114,21 @@ export default function App() {
     (phase === 'NIGHT_DETECTIVE' && myPlayer?.role === 'DETECTIVE');
   const isHostDay = phase === 'DAY_DISCUSSION' && myPlayer?.isHost;
 
-  if (view === 'LOGIN') {
+  // Lobby view - exactly like Al-Hosh
+  if (view === 'lobby') {
     return (
       <div className="min-h-screen bg-lime-500 flex items-center justify-center p-4 dir-rtl relative overflow-hidden font-sans">
         <div className="z-10 w-full max-w-md bg-white/20 backdrop-blur-md p-8 rounded-3xl shadow-2xl border border-white/30 text-center">
           <h1 className="text-7xl font-black mb-2 text-white drop-shadow-xl">الحوش</h1>
           <p className="text-lime-100 mb-8 font-bold opacity-90 uppercase tracking-widest">MAFIA ONLINE</p>
           <input className="w-full bg-black/30 text-white text-center p-4 rounded-xl mb-4 text-xl placeholder-white/70 font-bold border-none outline-none focus:ring-2 focus:ring-white" placeholder="اسمك المستعار" value={name} onChange={e => setName(e.target.value)} />
-          <button onClick={handleCreate} disabled={isCreating || connectionStatus === 'error'} className="w-full py-4 bg-lime-600 hover:bg-lime-700 text-white rounded-xl font-bold text-lg shadow-lg mb-4 border-b-4 border-lime-800 transition-all active:scale-95 disabled:opacity-50">
-            {connectionStatus === 'error' ? '❌ فشل الاتصال - تحقق من السيرفر' : isCreating ? '...جاري الاتصال بالسيرفر' : connectionStatus === 'connected' ? 'إنشاء غرفة جديدة 🎮' : '🔌 جاري الاتصال...'}
+          <button onClick={createGame} className="w-full py-4 bg-lime-600 hover:bg-lime-700 text-white rounded-xl font-bold text-lg shadow-lg mb-4 border-b-4 border-lime-800 transition-all active:scale-95">
+            إنشاء غرفة جديدة 🎮
           </button>
           <div className="flex gap-2">
-            <input className="flex-1 bg-black/30 text-white text-center p-4 rounded-xl placeholder-white/70 font-mono text-lg uppercase" placeholder="CODE" value={roomId} onChange={e => setRoomId(e.target.value)} />
-            <button onClick={handleJoin} className="bg-sky-600 hover:bg-sky-700 text-white px-6 rounded-xl font-bold shadow-lg border-b-4 border-sky-800 active:scale-95 transition-all">دخول</button>
+            <input className="flex-1 bg-black/30 text-white text-center p-4 rounded-xl placeholder-white/70 font-mono text-lg uppercase" placeholder="CODE" value={roomId} onChange={e => setRoomId(e.target.value.toUpperCase())} />
+            <button onClick={joinGame} className="bg-sky-600 hover:bg-sky-700 text-white px-6 rounded-xl font-bold shadow-lg border-b-4 border-sky-800 active:scale-95 transition-all">دخول</button>
           </div>
-          <p className="mt-8 text-lime-900 font-bold opacity-60 text-xs">ملاحظة: قد يستغرق الاتصال بالسيرفر حتى 60 ثانية عند أول اتصال</p>
         </div>
       </div>
     );
@@ -180,7 +153,7 @@ export default function App() {
         </div>
       )}
 
-      {view === 'LOBBY' && (
+      {view === 'game' && phase === 'LOBBY' && (
         <div className="max-w-4xl mx-auto text-center mt-20 p-6">
           <div className="inline-block bg-slate-800 px-8 py-4 rounded-full border border-purple-500/30 shadow-xl mb-12">
             <span className="text-slate-400 ml-4">رمز الغرفة:</span>
@@ -205,7 +178,7 @@ export default function App() {
         </div>
       )}
 
-      {view === 'GAME' && (
+      {view === 'game' && phase !== 'LOBBY' && (
         <>
           <div className="absolute top-0 w-full p-6 flex justify-between items-start z-40 bg-gradient-to-b from-black/80 to-transparent">
             <div>
@@ -219,11 +192,11 @@ export default function App() {
           <div className="pt-32 px-4 pb-32 grid grid-cols-2 lg:grid-cols-4 gap-4 max-w-6xl mx-auto">
             {players.map(p => (
               <motion.div layout key={p.id} onClick={() => isMyTurn && p.isAlive && handleAction(p.id)}
-                className={`relative bg-slate-800 p-6 rounded-2xl flex flex-col items-center border-2 transition-all cursor-pointer ${!p.isAlive ? 'border-red-900 bg-red-950/30 grayscale opacity-60' : 'border-slate-700'} ${isMyTurn && p.isAlive && p.id !== myPlayer?.id ? 'hover:border-purple-500 hover:scale-105' : ''} ${myPlayer?.id === p.id ? 'ring-2 ring-purple-500' : ''}`}>
+                className={`relative bg-slate-800 p-6 rounded-2xl flex flex-col items-center border-2 transition-all cursor-pointer ${!p.isAlive ? 'border-red-900 bg-red-950/30 grayscale opacity-60' : 'border-slate-700'} ${isMyTurn && p.isAlive && p.name !== myPlayer?.name ? 'hover:border-purple-500 hover:scale-105' : ''} ${myPlayer?.name === p.name ? 'ring-2 ring-purple-500' : ''}`}>
                 <div className="text-7xl mb-4">{p.isAlive ? p.avatar : '💀'}</div>
                 <div className="font-bold text-center w-full truncate">{p.name}</div>
                 {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center text-red-600 font-black text-3xl opacity-80 border-4 border-red-600 rounded-xl -rotate-12">ميت</div>}
-                {isHostDay && p.isAlive && p.id !== myPlayer?.id && (
+                {isHostDay && p.isAlive && p.name !== myPlayer?.name && (
                   <button onClick={(e) => { e.stopPropagation(); if (confirm(`إعدام ${p.name}؟`)) hostAction('KICK', p.id); }} className="absolute -top-3 -right-3 bg-red-600 text-white w-10 h-10 rounded-full font-bold shadow-lg flex items-center justify-center border-2 border-slate-900">🔪</button>
                 )}
               </motion.div>
