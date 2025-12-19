@@ -137,6 +137,7 @@ export default function App() {
     );
   }
 
+  // Game view
   return (
     <div className={`min-h-screen transition-colors duration-1000 ${isNight ? 'bg-black' : 'bg-slate-900'} text-white font-sans dir-rtl relative overflow-hidden`}>
       {myPlayer?.isHost && (
@@ -156,7 +157,7 @@ export default function App() {
         </div>
       )}
 
-      {view === 'game' && phase === 'LOBBY' && (
+      {phase === 'LOBBY' && (
         <div className="max-w-4xl mx-auto text-center mt-20 p-6">
           <div className="inline-block bg-slate-800 px-8 py-4 rounded-full border border-purple-500/30 shadow-xl mb-12">
             <span className="text-slate-400 ml-4">رمز الغرفة:</span>
@@ -181,7 +182,7 @@ export default function App() {
         </div>
       )}
 
-      {view === 'game' && phase !== 'LOBBY' && (
+      {phase !== 'LOBBY' && (
         <>
           <div className="absolute top-0 w-full p-6 flex justify-between items-start z-40 bg-gradient-to-b from-black/80 to-transparent">
             <div>
@@ -251,5 +252,83 @@ export default function App() {
         </>
       )}
     </div>
+  );
+}
+          </div >
+        </div >
+      )}
+
+{
+  view === 'game' && phase !== 'LOBBY' && (
+    <>
+      <div className="absolute top-0 w-full p-6 flex justify-between items-start z-40 bg-gradient-to-b from-black/80 to-transparent">
+        <div>
+          <div className="text-slate-400 text-sm">الملف الشخصي</div>
+          <div className="text-2xl font-bold text-cyan-300">{myPlayer?.name}</div>
+          <div className={`mt-1 font-bold ${myPlayer?.role === 'MAFIA' ? 'text-red-500' : 'text-green-400'}`}>{ROLES_AR[myPlayer?.role]}</div>
+        </div>
+        <div className="absolute left-1/2 -translate-x-1/2 top-6 px-6 py-2 bg-slate-800/80 rounded-full border border-slate-600 font-bold shadow-lg">{phase.replace(/_/g, ' ')}</div>
+      </div>
+
+      <div className="pt-32 px-4 pb-32 grid grid-cols-2 lg:grid-cols-4 gap-4 max-w-6xl mx-auto">
+        {players.map(p => (
+          <motion.div layout key={p.id} onClick={() => isMyTurn && p.isAlive && handleAction(p.id)}
+            className={`relative bg-slate-800 p-6 rounded-2xl flex flex-col items-center border-2 transition-all cursor-pointer ${!p.isAlive ? 'border-red-900 bg-red-950/30 grayscale opacity-60' : 'border-slate-700'} ${isMyTurn && p.isAlive && p.name !== myPlayer?.name ? 'hover:border-purple-500 hover:scale-105' : ''} ${myPlayer?.name === p.name ? 'ring-2 ring-purple-500' : ''}`}>
+            <div className="text-7xl mb-4">{p.isAlive ? p.avatar : '💀'}</div>
+            <div className="font-bold text-center w-full truncate">{p.name}</div>
+            {!p.isAlive && <div className="absolute inset-0 flex items-center justify-center text-red-600 font-black text-3xl opacity-80 border-4 border-red-600 rounded-xl -rotate-12">ميت</div>}
+            {isHostDay && p.isAlive && p.name !== myPlayer?.name && (
+              <button onClick={(e) => { e.stopPropagation(); if (confirm(`إعدام ${p.name}؟`)) hostAction('KICK', p.id); }} className="absolute -top-3 -right-3 bg-red-600 text-white w-10 h-10 rounded-full font-bold shadow-lg flex items-center justify-center border-2 border-slate-900">🔪</button>
+            )}
+          </motion.div>
+        ))}
+      </div>
+
+      {isHostDay && (
+        <div className="fixed top-28 left-1/2 -translate-x-1/2 z-50 flex gap-4 w-full justify-center px-4">
+          <div className="bg-slate-800/90 backdrop-blur p-4 rounded-2xl border border-red-500/30 flex items-center gap-6 shadow-2xl">
+            <button onClick={() => hostAction('SKIP')} className="bg-gradient-to-r from-blue-600 to-cyan-600 text-white px-8 py-3 rounded-xl font-bold text-lg">تخطي اليوم ⏭️</button>
+          </div>
+        </div>
+      )}
+
+      <AnimatePresence>
+        {msg && (
+          <motion.div initial={{ y: -50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -50, opacity: 0 }} className="fixed top-24 left-0 w-full flex justify-center z-50 pointer-events-none">
+            <div className="bg-red-600 text-white px-8 py-3 rounded-2xl shadow-2xl font-bold text-xl">{msg}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {investigationResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-800 p-10 rounded-3xl border border-slate-600 text-center shadow-2xl">
+            <div className="text-6xl mb-4">🕵️‍♂️</div>
+            <div className="text-3xl font-black bg-slate-900 p-6 rounded-xl border border-slate-700 mb-6">{investigationResult}</div>
+            <button onClick={() => setInvestigationResult(null)} className="text-slate-400 underline">إغلاق</button>
+          </div>
+        </div>
+      )}
+
+      {isNight && !isMyTurn && myPlayer?.isAlive && (
+        <div className="fixed inset-0 bg-black/95 z-30 flex flex-col items-center justify-center text-center p-8">
+          <motion.div animate={{ scale: [1, 1.1, 1], opacity: [0.3, 0.7, 0.3] }} transition={{ repeat: Infinity, duration: 4 }} className="text-9xl mb-8">🌑</motion.div>
+          <h2 className="text-4xl text-slate-700 tracking-[0.5em] uppercase">المدينة نائمة</h2>
+        </div>
+      )}
+
+      <div className="fixed bottom-0 w-full bg-gradient-to-t from-slate-900 to-transparent pt-32 pb-8 text-center z-30 pointer-events-none">
+        {isMyTurn ? (
+          <div className="text-3xl font-black text-green-400 animate-pulse">⚡ دورك الآن! ⚡</div>
+        ) : isHostDay ? (
+          <div className="text-3xl font-black text-red-400 animate-pulse">🚨 قرار الهوست 🚨</div>
+        ) : (
+          <div className="text-xl text-slate-500 font-bold">بانتظار الآخرين...</div>
+        )}
+      </div>
+    </>
+  )
+}
+    </div >
   );
 }
