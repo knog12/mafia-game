@@ -82,22 +82,10 @@ export default function App() {
       setIsCreating(false);
     });
 
-    const savedRoom = localStorage.getItem('mafia_savedRoom');
-    if (savedRoom && playerId && name) {
-      setRoomId(savedRoom);
-      socket.emit('reconnect_user', { roomId: savedRoom, playerId, playerName: name });
-    }
-
-    socket.on('room_joined', ({ roomId, players, phase }) => {
-      console.log('🎉 Room joined:', roomId);
-      setIsCreating(false);
-      setRoomId(roomId);
-      setPlayers([...players]);
-      setPhase(phase);
-      setView(phase === 'LOBBY' ? 'LOBBY' : 'GAME');
-      localStorage.setItem('mafia_savedRoom', roomId);
+    socket.on('player_joined', (data) => {
+      setPlayers(data.players);
+      setView('LOBBY');
     });
-
     socket.on('update_players', (list) => setPlayers([...list]));
     socket.on('game_started', (list) => { setPlayers([...list]); setView('GAME'); });
     socket.on('phase_change', (p) => { setPhase(p); setInvestigationResult(null); });
@@ -106,38 +94,40 @@ export default function App() {
     socket.on('day_result', ({ msg, players }) => { setMsg(msg); setPlayers(players); setTimeout(() => setMsg(''), 6000); });
     socket.on('investigation_result', res => setInvestigationResult(res));
     socket.on('game_over', w => { setPhase('GAME_OVER'); setMsg(`انتهت اللعبة! الفائز: ${w === 'MAFIA' ? 'المافيا' : 'المواطنون'}`); });
-    socket.on('error', err => { setIsCreating(false); alert(err); if (err.includes('not found')) setView('LOGIN'); });
     socket.on('force_disconnect', () => { alert('تم طردك'); setView('LOGIN'); localStorage.removeItem('mafia_savedRoom'); });
 
-    return () => socket.off();
-  }, [playerId, name]);
+    return () => {
+      socket.off('player_joined');
+      socket.off('update_players');
+      socket.off('game_started');
+      socket.off('phase_change');
+      socket.off('game_message');
+      socket.off('play_audio');
+      socket.off('day_result');
+      socket.off('investigation_result');
+      socket.off('game_over');
+      socket.off('force_disconnect');
+    };
+  }, []);
 
   const handleCreate = () => {
     if (!name) return alert('أدخل الاسم');
-
-    // Check connection status
-    if (!socket.connected) {
-      alert('غير متصل بالسيرفر! جاري المحاولة...');
-      setIsCreating(true);
-      // Wait for connection
-      socket.once('connect', () => {
-        console.log('🔄 Reconnected, creating room...');
-        localStorage.setItem('mafia_playerName', name);
-        socket.emit('create_room', { playerName: name, playerId });
-      });
-      return;
-    }
-
-    console.log('📤 Sending create_room event...');
-    setIsCreating(true);
     localStorage.setItem('mafia_playerName', name);
-    socket.emit('create_room', { playerName: name, playerId });
+    socket.emit('create_room', { playerName: name, playerId }, (res) => {
+      if (res.error) return alert(res.error);
+      setRoomId(res.roomCode);
+      setView('LOBBY');
+    });
   };
 
   const handleJoin = () => {
     if (!name || !roomId) return alert('أدخل البيانات');
     localStorage.setItem('mafia_playerName', name);
-    socket.emit('join_room', { roomId: roomId.toUpperCase().trim(), playerName: name, playerId });
+    socket.emit('join_room', { roomId: roomId.toUpperCase().trim(), playerName: name, playerId }, (res) => {
+      if (res.error) return alert(res.error);
+      setRoomId(roomId.toUpperCase().trim());
+      setView('LOBBY');
+    });
   };
 
   const startGame = () => socket.emit('start_game', { roomId });

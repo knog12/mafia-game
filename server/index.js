@@ -41,8 +41,11 @@ io.on('connection', (socket) => {
   console.log('✅ User Connected:', socket.id, '| Transport:', socket.conn.transport.name);
 
   // 1. CREATE ROOM
-  socket.on('create_room', ({ playerName, playerId }) => {
-    if (!playerId) return socket.emit('error', 'No Player ID');
+  socket.on('create_room', ({ playerName, playerId }, callback) => {
+    if (!playerId) {
+      if (callback) callback({ error: 'No Player ID' });
+      return;
+    }
 
     const roomId = uuidv4().substring(0, 4).toUpperCase();
 
@@ -70,23 +73,31 @@ io.on('connection', (socket) => {
 
     socket.join(roomId);
 
-    // إرسال تأكيد الانضمام للهوست
-    socket.emit('room_joined', { roomId, players: rooms[roomId].players, phase: PHASES.LOBBY });
+    // Send callback response immediately
+    if (callback) callback({ roomCode: roomId });
 
-    // *إضافة مهمة*: تحديث القائمة فوراً للتأكيد
+    // Update all players in room
     io.to(roomId).emit('update_players', rooms[roomId].players);
 
     console.log(`Room ${roomId} created by ${playerName}`);
   });
 
   // 2. JOIN / RECONNECT
-  socket.on('join_room', ({ roomId, playerName, playerId }) => handleJoin(socket, roomId?.toUpperCase(), playerName, playerId));
-  socket.on('reconnect_user', ({ roomId, playerName, playerId }) => handleJoin(socket, roomId?.toUpperCase(), playerName, playerId));
+  socket.on('join_room', ({ roomId, playerName, playerId }, callback) => handleJoin(socket, roomId?.toUpperCase(), playerName, playerId, callback));
+  socket.on('reconnect_user', ({ roomId, playerName, playerId }) => handleJoin(socket, roomId?.toUpperCase(), playerName, playerId, null));
 
-  function handleJoin(socket, roomId, playerName, playerId) {
+  function handleJoin(socket, roomId, playerName, playerId, callback) {
     const room = rooms[roomId];
-    if (!room) return socket.emit('error', 'الغرفة غير موجودة');
-    if (!playerId) return socket.emit('error', 'No Player ID');
+    if (!room) {
+      if (callback) callback({ error: 'الغرفة غير موجودة' });
+      else socket.emit('error', 'الغرفة غير موجودة');
+      return;
+    }
+    if (!playerId) {
+      if (callback) callback({ error: 'No Player ID' });
+      else socket.emit('error', 'No Player ID');
+      return;
+    }
 
     let player = room.players.find(p => p.id === playerId);
 
@@ -103,10 +114,14 @@ io.on('connection', (socket) => {
       player.socketId = socket.id;
       if (playerName) player.name = playerName;
       socket.join(roomId);
-      socket.emit('room_joined', { roomId, players: room.players, phase: room.phase });
+      if (callback) callback({ success: true });
     } else {
       // New Player
-      if (room.phase !== PHASES.LOBBY) return socket.emit('error', 'اللعبة بدأت بالفعل');
+      if (room.phase !== PHASES.LOBBY) {
+        if (callback) callback({ error: 'اللعبة بدأت بالفعل' });
+        else socket.emit('error', 'اللعبة بدأت بالفعل');
+        return;
+      }
 
       const newPlayer = {
         id: playerId,
@@ -121,11 +136,11 @@ io.on('connection', (socket) => {
 
       room.players.push(newPlayer);
       socket.join(roomId);
-      socket.emit('room_joined', { roomId, players: room.players, phase: room.phase });
+      if (callback) callback({ success: true });
     }
 
     // *** تحديث القائمة لكل الموجودين في الغرفة (بما فيهم الهوست والجديد) ***
-    io.to(roomId).emit('update_players', room.players);
+    io.to(roomId).emit('player_joined', { players: room.players });
   }
 
   // 3. START GAME
